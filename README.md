@@ -1,0 +1,342 @@
+# dsh-progress-nudge
+
+让 Agent 在长回合里**主动、简短地汇报进度**的 DeepSeek Harness 插件。
+
+> **安装 / 卸载 / 已知限制** → [INSTALL.md](INSTALL.md)。零依赖，不用装任何 npm 包。
+
+除了进度提醒，它顺带做三件小事：
+
+- **余额监控** —— 读宿主自己的账户余额（**不碰你的 API key**），低于阈值就让 Agent
+  提醒你充值；充值余额与赠送余额分开显示，判定按两者之和（平台扣款先从赠金扣）。
+- **峰谷时段** —— 侧栏常驻显示 DeepSeek 官方的高峰/低谷时段，「梁文峰」= 高峰（红色发光）、
+  「梁文谷」= 低谷（绿色，半价）。
+- **可见性** —— 每次提醒会在聊天区弹横幅，告诉你「上次提醒是什么时候」；
+  越过阈值却还在等步骤边界时，也会明确写出来，而不是让你干等。
+
+两个触发器，阈值都可调：
+
+| 触发器 | 默认 | 含义 |
+|---|---|---|
+| 步数 | **10 步** | 自上次汇报起累计 N 次工具调用 |
+| 时间 | **120 秒** | 自上次汇报起累计经过的真实时间 |
+
+任一命中就提醒一次，然后**两个计量一起归零**（共用量表，避免「第 10 步刚提醒完、
+2 秒后时间阈值又到」的连击刷屏）。
+
+提醒不是弹窗，而是通过 `tools/post-execute` 决策的 `additionalContexts`
+**注入一条合成 user 消息**——唯一能让模型真正看见并照做的通道。
+消息带 `source.kind = 'progress-nudge'`，所以不会被当成用户提示词污染历史。
+
+## 计量规则
+
+时钟按**墙钟**推进，`running` 决定它在不在走。停表**只由两件事**触发：暂停、回合结束。
+
+| 情况 | 行为 |
+|---|---|
+| **暂停**（面板上的暂停按钮） | 立刻冻结，秒数纹丝不动；干等多久都不涨。恢复后从冻结值继续，**不补算**暂停期间的时间 |
+| **回合结束**（`agent/turn-stopping`） | 归零并**停表**，面板回到 `0 步 / 0 秒` |
+| **新回合 / 新用户消息**（`agent/pre-step` 的 turn 编号变化） | 归零并**起表**——用户刚发消息，接下来的思考时间要计 |
+| **Agent 主动对你输出文本**（`agent/assistant-stream` 的 `text-delta`） | 归零并**继续走表**——「它刚跟人说过话了」，计量从这句话开始重算 |
+
+**只有真正对人说话才触发最后一条**：思考是 `reasoning-delta`、执行是
+`tool-call-delta`、空白文本，都不会重置（有测试钉住这三条）。
+不需要的话把 `resetOnSpeech` 设成 `false`。
+
+### 为什么要"继续走表"而不是"停表"
+
+最初的实现是「只统计两次工具调用之间」，并且说话后直接 `anchorAt = null` 停表。
+后果是：Agent 说完一句话 → 停表 → 接着深度思考 3 分钟、期间一次工具都没调
+→ 界面上一直显示 `0/10 · 0秒`，看起来像坏了，**这段时间的时间触发也永远打不到**。
+
+现在：说话只清零计量、时钟立刻从那一刻重新起表；思考时间照常累计，
+并在下一次工具调用时参与时间阈值判断。另外 `/status` 的 `live` 是**读取时现算**
+的（不是缓存的快照），否则两次工具调用之间接口只会吐旧值——这是同一个 bug 的另一半。
+
+## 界面
+
+两处界面。
+
+| 元素 | 内容 |
+|---|---|
+| 侧栏按钮 | 实时显示「第 N/阈值 步 · 已过秒数」；暂停时变色显示「已暂停」。时钟停摆时秒数不做本地插值 |
+| 侧栏展开面板 | 两条进度条 + **步数/时间阈值输入框** + 暂停恢复 + 恢复默认 + 已提醒与已汇报次数 |
+| 聊天区横幅（常驻） | 只要提醒过至少一次，输入框上方**一直**显示「● 上次提醒 10月12日 12:27」 |
+| 聊天区横幅（高亮） | 新的提醒到达时，换成「● 已提醒 Agent 汇报进度 · step 10 · #1」并高亮 12 秒，之后回落常驻样式 |
+
+横幅上的时间是**宿主返回的 `nudge.at`**（服务器时钟），不是浏览器本地时间——
+这样它和会话日志、接口里的时间完全对得上。横幅右侧有个 `×`，手动关掉后会一直
+藏到**下一次提醒**为止（不是永久关闭）。
+
+两个阈值**输入即生效**（防抖 350ms 后打 `/progress-nudge/api/config`），**没有保存键**。
+改的是运行时覆盖：立即生效、不写 profile 配置、重启后回落到默认值。
+输入框只在第一次拿到快照时同步一次，之后不会被轮询覆盖（否则会打断你正在输入的数字）；
+点「恢复默认」会重新同步。
+
+设置页那张卡片**已移除**——侧栏面板就够了，没必要两处入口。
+
+### 为什么必须有聊天区横幅
+
+提醒是通过 `additionalContexts` 注入的**合成 user 消息**，只有模型看得见；
+用户那一侧悄无声息——你能看到 Agent 之后有没有汇报，却看不到「提醒到底发出去没有」。
+横幅把这件事补成可见的：Host 在每次提醒时把 `nudge` 快照（`seq`/时间戳/触发原因/步数/文案）
+放进 `/status`，客户端靠 `seq` 递增判断「有新提醒」并高亮一次。
+首次拿到快照只记基线，不会把历史提醒当新事件弹出来。
+
+### 投递时机（硬约束，改不了）
+
+提醒**只能在步骤边界投递**——`additionalContexts` 只能挂在 `tools/post-execute`
+决策上。所以一个跑 4 分钟的命令，计量早在 120 秒就越界，但提醒必须等命令返回。
+
+**为什么不能"不等进程结束就提醒模型"**：工具执行期间 agent 循环是阻塞的，
+模型根本没在运行，读不到任何东西。宿主提供了 `agent.inject()` / `agent.steer()`
+这类"随时可调用"的注入通道，但看运行时源码就知道它们**不会打断正在执行的工具**：
+
+```js
+inject(input) { this.send(input, 'next-step', false); }  // 塞进 next-step，不唤醒
+steer(input)  { this.send(input, 'next-step', true);  }  // 塞进 next-step + 唤醒
+wakeDriver(wakeAfterAbort) {
+  if (this.phase.kind !== 'idle') {          // ← 工具正在跑
+    if (… || wakeAfterAbort) this.phase.wakeRequested = true;
+    return;                                   // 只记一个标记就返回
+  }
+  …起一个新的运行阶段…
+}
+```
+
+唤醒只在 agent **空闲**时才真的启动新步骤。唯一能强制打断的是 `cancel()`，
+那等于杀掉用户正在跑的命令，不可接受。
+
+**所以能做的是把"它在等"这件事显示出来**：越过时间阈值却还没到步骤边界时，
+`/status` 的 `pending`（`due` / `overSeconds` / `blocked`）让界面显示
+
+> ● 已到期 224 秒 · 等当前步骤结束后提醒（上次提醒 10月12日 12:35）
+
+而不是让你对着一根越过阈值的进度条和「已提醒 0」猜它是不是坏了。
+
+## 配置
+
+`cordis.patch.yml` 里的行配置（默认值见该文件）：
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `true` | 总开关（暂停） |
+| `stepThreshold` | `10` | 累计多少步提醒一次 |
+| `timeThresholdSeconds` | `120` | 距上次汇报累计多少秒提醒一次 |
+| `minGapSeconds` | `45` | 两次提醒的最小间隔，兜底的连击保护 |
+| `maxPerTurn` | `20` | 单回合提醒上限，超过后静默 |
+| `exclude` | `["todo_write","ask_user_question"]` | 不计步、也不重置计数的工具 |
+| `includeSubagents` | `false` | 是否也为 subagent 计数提醒 |
+| `resetOnSpeech` | `true` | Agent 主动输出文本时是否归零计量 |
+| `locale` | `zh` | 提醒文案语言（`zh` \| `en`） |
+| `balance.enabled` | `true` | 是否开启余额监控 |
+| `balance.thresholdCny` | `1.5` | 低于这个金额就提醒 |
+| `balance.scope` | `total` | 判定口径：`total` = 充值 + 赠送；`recharge` = 只看充值 |
+| `balance.checkSeconds` | `300` | 多久查一次余额（最小 30） |
+| `balance.repeatSeconds` | `1800` | 仍在阈值以下时隔多久再提醒；`0` = 只提醒一次 |
+| `balance.includeInReport` | `true` | 低额时在进度汇报末尾顺带提一句 |
+| `tariff.enabled` | `true` | 是否在侧栏常驻显示「梁文峰 / 梁文谷」 |
+| `tariff.holidays` | `[]` | 中国法定节假日（北京时间 `YYYY-MM-DD`），全天按低谷算 |
+
+非法配置在插件激活时**直接抛错**，不会静默回退。
+
+## 峰谷时段
+
+DeepSeek 官方口径（[Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing)）：
+
+> Off-peak rates are half of the peak rates. Peak hours are **01:00 - 04:00 and
+> 06:00 - 10:00 UTC, Monday through Friday, excluding Chinese public holidays.**
+> All other hours are off-peak, including weekends and Chinese public holidays in full.
+
+换算成北京时间正好是**工作日 09:00–12:00 与 14:00–18:00**，低谷一律半价。
+
+| | |
+|---|---|
+| **高峰** | 工作日 09:00–12:00、14:00–18:00 → `梁文峰`（橙） |
+| **低谷** | 其余全部：午休 12–14、夜间、**周末、法定节假日** → `梁文谷`（绿） |
+
+侧栏按钮常驻显示当前标签，悬停给出高峰窗口、下次切换时刻与倒计时；
+面板里另有一行写明官方窗口与「下一次切换：12:00 → 梁文谷（还有 58 分钟）」。
+
+实现要点：
+
+- 时间**一律按北京时间算，再用 `getUTC*` 读**（加 8 小时后按 UTC 取值），
+  换机器、换 `TZ` 环境变量结果都不变。
+- 下一次切换用「枚举未来 8 天每个高峰窗口的起止，取第一个状态翻转的点」，
+  跨周末、跨节假日都不会漏。
+- ⚠️ **中国法定节假日无法离线判断**，只能靠 `tariff.holidays` 手工列。
+  列表为空时只排除周末——这是唯一诚实的做法，不能假装知道；
+  面板上会提示「未配置节假日，仅按周末与时段判断」。
+
+> 这是 DeepSeek 官方 API 的计费口径。如果你走第三方中转站，是否适用、
+> 折率多少以对方说明为准；不需要的话把 `tariff.enabled` 关掉即可。
+
+## 余额监控
+
+余额**不自己去打任何 API**，而是读宿主自己的 `deepseekAccount` 服务
+（设置页「账号与余额」显示的就是它）：
+
+```js
+const account = ctx.get('deepseekAccount')
+const outcome = await account.getBalance({ version, locale, timezoneOffsetSeconds })
+// → { status:'ready',
+//     value:        [{ currency:'CNY', balance:'2.85033112' }],   // 充值钱包
+//     bonusWallets: [{ currency:'CNY', balance:'91.7637864'  }] } // 赠送钱包
+//   | { status:'failed' } | null（未登录）
+```
+
+这样做的好处：插件**不碰任何 API key**，也不关心中转站——你用哪个 provider、
+key 存在哪、走不走中转，都和它无关。
+
+### 为什么默认按「可用总额」判定
+
+平台**扣款先从赠金账户扣**。所以「会不会用不了」看的是 `充值 + 赠送`，
+只看充值余额会在「赠金还有一大笔」时**误报**：
+
+| 充值 | 赠送 | 可用总额 | 阈值 1.5 下 |
+|---|---|---|---|
+| ¥2.85 | ¥91.76 | **¥94.61** | `total` → 不提醒 ✅（`recharge` → 会误报） |
+| ¥1.00 | ¥0.00 | ¥1.00 | 两个口径都提醒 ✅ |
+
+想只在充值余额低时提醒（比如担心赠金过期），把 `scope` 设成 `recharge`。
+**提醒文案的主语会跟着口径变**——`recharge` 口径下说「充值余额只剩 ¥1.00（另有赠送
+¥92.52，可用合计 ¥93.52）」，不会写出「可用余额只剩 ¥93.52」这种误导话术。
+
+| 行为 | 说明 |
+|---|---|
+| 轮询 | 每 `checkSeconds` 查一次，读数超过两个周期就算过期，**宁可不报也不报旧数** |
+| 打开面板 | 侧栏面板一打开就顺手刷一次余额（不然显示的是几分钟前的旧数），另有 `↻` 手动刷新 |
+| 低额提醒 | 按 `scope` 判定命中时，在下一次工具边界投递一条「【余额不足】…」，带真实余额、来源明细、阈值与**官方充值链接** |
+| 去重 | 按 `repeatSeconds` 去重；`0` 表示只提醒一次 |
+| 顺带提及 | `includeInReport` 开着时，低额期间的进度汇报末尾会附一句 |
+| 未登录/服务缺失 | 记为 `failed` / `unavailable`，**不提醒也不崩**——不知道就不说 |
+| 显示 | 面板两行：`可用余额 ¥94.61` + 小字 `充值 ¥2.85 · 赠送 ¥91.76`；低额时横幅常驻警示 |
+
+金额显示统一收成两位小数（宿主给的是 `2.85033112` 这种高精度字符串）。
+
+> ⚠️ 轮询用的 `setInterval` **必须 `unref()`**，否则它会一直吊着事件循环，
+> 插件卸载后进程也退不掉——测试直接挂死就是这个原因。
+
+## 提醒文案
+
+三条，分语气：首次（轻）、后续（详细，带最近工具名与回合合计）、时间型（步数少但耗时长）。
+三条都强制写死「汇报完继续执行」与字数上限——否则模型可能停下来等回复，
+或者把汇报本身变成新的 token 黑洞。文案见 `index.js` 的 `TEXT` 常量。
+
+**三条都带真实系统时间**，例如：
+
+```text
+【进度汇报】现在是 2026-10-12 12:30:09（周一）｜距上次汇报已累计 10 步 / 8 秒；
+本回合起于 2026-10-12 12:30:01，已跑 8 秒。
+```
+
+为什么必须塞时间进去：模型**估不准自己的耗时**（预估值几乎总是偏低）。把钟直接递到
+它手上，它才能判断"这一步是不是卡太久了"，也才能向用户报出可信的耗时。
+回合开始时间是用「当前时间 − 回合已跑毫秒」反推出来的，不需要额外记录。
+
+## 安装
+
+完整步骤见 [INSTALL.md](INSTALL.md)。三步：把包放进 profile 的 `node_modules/@local/`、
+在 profile 的 `package.json` 里登记两处、重启 DeepSeek Harness。
+
+> **新增 bundle 不会热加载**，必须重启才会激活。
+
+## 验证
+
+测试**零依赖**，不需要装任何东西，只用 Node 自带的能力：
+
+```bash
+node test/run.mjs
+```
+
+它会跑两套：
+
+- `smoke.mjs` —— Host 半边逻辑（步数/时间触发、冻结、归零、路由、余额、峰谷）
+- `client.mjs` —— Client 半边结构（加载、槽位注册、面板/横幅渲染、样式规则）
+
+`index.js` 只 `import 'node:crypto'`，`client.js` 只从宿主模块表取 `react`——
+没有 npm 依赖，所以也不存在"装依赖失败"这种问题。用 DSH 自带的 Node 跑即可，
+或任意 Node 18+。
+
+
+界面上确认：刷新页面后侧栏底部应出现进度按钮；聊天区输入框上方应在提醒发出时弹横幅。
+（设置页那张卡片已经在 v0.1 之后移除。）
+
+## 日志复盘
+
+会话日志是 `~/.dsh/sessions/<workspace>/<session>/session.v4.jsonl.zstd`，
+**多帧 zstd 拼接**，Node 的 zstd 解码器不跨帧（整段解压只得到第一帧）。
+`tools/scan-nudges.cjs` 照抄 DSH 自己的 `scanZstdFrames` 切帧后逐帧解压：
+
+```powershell
+node tools\scan-nudges.cjs count 3     # 每个会话的提醒次数 + 相邻间隔
+node tools\scan-nudges.cjs detail 3    # 每次提醒的文案与触发原因
+```
+
+统计口径有个坑：**一次提醒会写两条记录**（`agent/inbox/spliced` + `user/message`），
+只按字符串匹配会把次数翻倍。正确判据是 `type === 'user/message'` 且
+`data.source.kind === 'progress-nudge'`。
+
+## 回滚
+
+```powershell
+powershell -File tools\rollback-profile.ps1
+```
+
+会还原 profile 的 `package.json`、移除 junction。还原后重启 App 即彻底卸载。
+（也可以只把 `dsh.profile.bundles` 里的 `@local/dsh-progress-nudge` 删掉再重启。）
+
+## 开发备注
+
+- Host 半边只用到两个公开扩展点：`tools/post-execute` / `agent/pre-step` 事件，
+  以及（可选的）`webServer.register` 前缀路由。
+- **刻意零外部依赖**：`index.js` 只 `import 'node:crypto'`。原因见「坑一」。
+- Client 半边是手写的 `__ModuleLoader__` 闭包，**无构建步骤**；
+  `require()` 只取平台种子（react），样式只用 `--dsw-alias-*` 主题 token。
+- `tools/` 与 `test/` 是开发用的，不随包发布（见 `package.json` 的 `files`）。
+- 设计文档见 `DESIGN.md`，参考实现见 `dsh-src/` 与 `refs/`。
+
+### 坑一：profile 插件不要 import `@deepseek-ai/*`
+
+**实测**：插件里 `import z from '@deepseek-ai/schemastery'` 会让整个插件挂掉，
+宿主只在 stderr 报一行
+`progress-nudge (@local/dsh-progress-nudge): failed to import`。
+
+原因两层：
+
+1. 宿主对 profile 插件的裸依赖不保证解析；
+2. 更隐蔽的一层：**Node 按「真实路径」解析依赖**。本插件用 junction 挂在
+   `<profile>\node_modules\@local\` 下，真实路径是 `F:\...`，于是 Node 从 `F:\`
+   往上找 `node_modules`，永远走不到 `%USERPROFILE%\.dsh\profiles\node_modules`
+   （那里其实躺着 react、express、`@deepseek-ai/*` 一大票包）。pnpm 装的包因为
+   realpath 落在 profile 内部，所以没这个问题。
+
+结论：**要么零依赖，要么用 pnpm 正常安装**。本插件选前者，所以 `Config` 换成自带
+的 `DEFAULTS` + 手工 fail-loud 校验，消息构造也不再借 `@deepseek-ai/dsh-llm` 的
+`createUserMessage`（DSH 内部实现里 `brandString` 是恒等函数，普通 uuid 完全等价）。
+
+### 坑二：本地验证挂载时别点亮浏览器
+
+想在不碰用户正在用的 App 的前提下验证，复制一份 profile 来挂载：
+
+```powershell
+# 复制 desktop -> probe：改掉 package.json 里的 profile 名，且绝对不要写 BOM
+& $exe $bin --profile probe --no-open    # --no-open 必须加，否则会开浏览器标签
+```
+
+stderr 里出现 `dsh: warning: N entry did not activate` 就是有插件没加载成功——
+这是判断插件是否被宿主接受的**唯一可靠信号**。
+带认证探测插件路由用 `tools\probe-local.cjs`（先拿 token 换 cookie，再打接口）。
+验证完记得删掉 `%USERPROFILE%\.dsh\profiles\probe`。
+
+### 坑三：说话重置计量时，别把防连击冷却一起清了
+
+`resetOnSpeech` 一开始顺手写了 `state.lastNudgeAt = 0`，看起来"把一切都归零"很干净，
+实际上**把 `minGapSeconds` 一起废掉了**：日志里出现了 36 秒、42 秒的相邻提醒，
+而阈值配的是 45 秒。
+
+正确语义是分开的两件事：
+
+- `ms/steps/anchorAt` —— 「距上次汇报」的**计量**，说话时归零；
+- `lastNudgeAt` —— 「距上次提醒」的**冷却**，只由提醒本身推进。
+
+测试 16 专门钉住这条：说话之后紧接着再凑满阈值，仍然必须被 minGap 挡住。

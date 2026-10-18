@@ -1,0 +1,59 @@
+# dsh-progress-nudge bundle patch.
+#
+# 挂载本包只插入一行插件。下面的默认值是**完整的**：用户在别处覆盖某一项时，
+# 那一整份 config 会被替换，所以要保留的字段必须重述。
+#
+# 安装会把本包追加进 profile 的 `dsh.profile.bundles`，这一层负责挂行。
+#
+# 同一个 profile 里不要留两行同 id：两份实例会各自注册
+# `/progress-nudge/api` 前缀路由，重复路由会让整棵插件树启动失败。
+- insert:
+    - id: progress-nudge
+      name: '@local/dsh-progress-nudge'
+      config:
+        # 总开关。侧栏面板上的「暂停/恢复」可以在运行时改它，不动这里。
+        enabled: true
+        # 累计多少步提醒一次。
+        stepThreshold: 10
+        # 距上次汇报累计多少秒提醒一次。
+        timeThresholdSeconds: 120
+        # 两次提醒的最小间隔（秒），兜底的连击保护。
+        minGapSeconds: 45
+        # 单回合提醒次数上限，超过后静默。
+        maxPerTurn: 20
+        # 不计步、也不重置计数的工具。
+        exclude:
+          - todo_write
+          - ask_user_question
+        # 是否为 subagent 也计数并提醒。
+        includeSubagents: false
+        # Agent 主动对用户输出文本时，是否把计量归零（刚说过话就别再催）。
+        # 只认 text-delta；思考 reasoning-delta、执行 tool-call-delta 都不会触发。
+        resetOnSpeech: true
+        # 提醒文案语言：zh | en。
+        locale: zh
+        # 余额监控。余额来自宿主的 deepseekAccount 服务（设置页「账号与余额」
+        # 显示的就是它），插件不碰任何 API key，也不关心中转站。
+        balance:
+          # 是否开启。
+          enabled: true
+          # 低于这个金额就提醒。
+          thresholdCny: 1.5
+          # 判定口径：total = 充值 + 赠送（默认；平台扣款先从赠金扣，
+          # 只看充值会在"赠金还有一大笔"时误报）；recharge = 只看充值余额。
+          scope: total
+          # 多久查一次余额（秒），最小 30。
+          checkSeconds: 300
+          # 仍在阈值以下时，隔多久再提醒一次（秒）；0 = 只提醒一次。
+          repeatSeconds: 1800
+          # 低于阈值时，是否在进度汇报末尾顺带提一句。
+          includeInReport: true
+        # 峰谷时段指示。DeepSeek 官方口径：高峰 = 01:00–04:00 与 06:00–10:00 UTC，
+        # 周一至周五，剔除中国法定节假日；低谷半价。
+        # 换算成北京时间即工作日 09:00–12:00 与 14:00–18:00。
+        tariff:
+          # 是否在侧栏常驻显示「梁文峰（高峰）/ 梁文谷（低谷）」。
+          enabled: true
+          # 中国法定节假日（北京时间 YYYY-MM-DD）。官方口径里节假日全天低谷，
+          # 但节假日无法离线判断，只能手工列；留空就只按周末 + 时段算。
+          holidays: []

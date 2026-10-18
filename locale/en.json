@@ -1,0 +1,4 @@
+{
+  "title": "Progress nudge",
+  "description": "Remind the agent to give a short progress report after N steps or N seconds. A sidebar panel shows the live counters and a settings card tunes the thresholds."
+}

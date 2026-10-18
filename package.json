@@ -1,0 +1,49 @@
+{
+  "name": "@local/dsh-progress-nudge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Progress nudge for DeepSeek Harness: remind the agent to report progress after N steps or N seconds, with a live sidebar panel",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "progress",
+    "reminder"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/",
+    "icon.svg",
+    "README.md",
+    "INSTALL.md",
+    "LICENSE",
+    "test/"
+  ],
+  "meta": {
+    "title": "进度汇报提醒",
+    "description": "累计 N 步或 N 秒后，提醒 Agent 简短汇报一次进度；侧栏面板显示实时计数，阈值直接在面板里改，输入即生效。"
+  },
+  "icon": "./icon.svg",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}
