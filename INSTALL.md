@@ -19,7 +19,7 @@ DSH 插件就是「一个包 + 在 profile 里登记两处」。全程不需要�
 解压到比如：
 
 ```
-C:\Users\你\Documents\dsh-progress-nudge
+C:\Users\你\Documents\kiru-progress-bar
 ```
 
 这个目录里应该直接能看到 `package.json`、`index.js`、`client.js`。
@@ -37,7 +37,7 @@ C:\Users\你\Documents\dsh-progress-nudge
   "private": true,
   "dependencies": {
     // ① 声明依赖，路径指向第 1 步的目录
-    "@local/dsh-progress-nudge": "link:C:/Users/你/Documents/dsh-progress-nudge"
+    "kiru-progress-bar": "link:C:/Users/你/Documents/kiru-progress-bar"
   },
   "dsh": {
     "profile": {
@@ -45,7 +45,7 @@ C:\Users\你\Documents\dsh-progress-nudge
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-web-app",
         // ② 加进 bundle 列表，DSH 启动时才会加载它
-        "@local/dsh-progress-nudge"
+        "kiru-progress-bar"
       ]
     }
   }
@@ -56,27 +56,28 @@ C:\Users\你\Documents\dsh-progress-nudge
 
 ## 3. 让 DSH 能找到这个包
 
-在 `<profile>/node_modules/@local/` 下建一个链接指向第 1 步的目录。
+在 `<profile>/node_modules/` 下建一个链接指向第 1 步的目录。
+（包名没有 scope，所以**不需要**建 `@local/` 之类的子目录。）
 
 **Windows（推荐 junction，不需要管理员权限）：**
 
 ```powershell
 $profile = "$env:USERPROFILE\.dsh\profiles\desktop"
-New-Item -ItemType Directory -Force -Path "$profile\node_modules\@local" | Out-Null
+New-Item -ItemType Directory -Force -Path "$profile\node_modules" | Out-Null
 New-Item -ItemType Junction `
-  -Path   "$profile\node_modules\@local\dsh-progress-nudge" `
-  -Target "C:\Users\你\Documents\dsh-progress-nudge"
+  -Path   "$profile\node_modules\kiru-progress-bar" `
+  -Target "C:\Users\你\Documents\kiru-progress-bar"
 ```
 
 **macOS / Linux：**
 
 ```bash
-ln -s /Users/你/Documents/dsh-progress-nudge \
-      ~/.dsh/profiles/desktop/node_modules/@local/dsh-progress-nudge
+ln -s /Users/你/Documents/kiru-progress-bar \
+      ~/.dsh/profiles/desktop/node_modules/kiru-progress-bar
 ```
 
-**嫌麻烦也可以直接复制**整个 `dsh-progress-nudge` 文件夹到
-`<profile>/node_modules/@local/dsh-progress-nudge`——效果一样，只是以后升级要重新复制。
+**嫌麻烦也可以直接复制**整个 `kiru-progress-bar` 文件夹到
+`<profile>/node_modules/kiru-progress-bar`——效果一样，只是以后升级要重新复制。
 
 ## 4. 重启 DeepSeek Harness
 
@@ -94,7 +95,7 @@ ln -s /Users/你/Documents/dsh-progress-nudge \
 
 **如果没出现**，按顺序查：
 
-1. `<profile>/node_modules/@local/dsh-progress-nudge/package.json` 能不能打开？打不开说明第 3 步没建对。
+1. `<profile>/node_modules/kiru-progress-bar/package.json` 能不能打开？打不开说明第 3 步没建对。
 2. profile 的 `package.json` 里两处都加了吗？`dsh.profile.bundles` 里那一项拼错会静默不加载。
 3. 启动日志里搜 `did not activate`——有的话说明某个插件没激活，通常会给包名。
 
@@ -129,7 +130,7 @@ ln -s /Users/你/Documents/dsh-progress-nudge \
 ## 卸载 / 回滚
 
 1. 从 profile 的 `package.json` 里删掉那两处（`dependencies` 与 `dsh.profile.bundles`）。
-2. 删掉 `<profile>/node_modules/@local/dsh-progress-nudge`（junction 用
+2. 删掉 `<profile>/node_modules/kiru-progress-bar`（junction 用
    `Remove-Item` 即可，它只删链接、不动源目录）。
 3. 重启 DSH。
 

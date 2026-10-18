@@ -1,4 +1,4 @@
-# dsh-progress-nudge bundle patch.
+# kiru-progress-bar bundle patch.
 #
 # 挂载本包只插入一行插件。下面的默认值是**完整的**：用户在别处覆盖某一项时，
 # 那一整份 config 会被替换，所以要保留的字段必须重述。
@@ -9,7 +9,7 @@
 # `/progress-nudge/api` 前缀路由，重复路由会让整棵插件树启动失败。
 - insert:
     - id: progress-nudge
-      name: '@local/dsh-progress-nudge'
+      name: 'kiru-progress-bar'
       config:
         # 总开关。侧栏面板上的「暂停/恢复」可以在运行时改它，不动这里。
         enabled: true

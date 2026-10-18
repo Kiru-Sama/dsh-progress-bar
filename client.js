@@ -1,5 +1,5 @@
 /**
- * Browser half of @local/dsh-progress-nudge.
+ * Browser half of kiru-progress-bar.
  *
  * 只贡献一个界面，数据来自 Host 侧 `/progress-nudge/api` 路由：
  *
@@ -12,7 +12,7 @@
  * （`--dsw-alias-*`）上，自动跟随明暗主题。
  */
 window.__ModuleLoader__.load({
-  id: '@local/dsh-progress-nudge',
+  id: 'kiru-progress-bar',
   factory(require) {
     const React = require('react')
     const { useState, useEffect, useRef, useCallback, createElement: h } = React

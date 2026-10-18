@@ -1,5 +1,5 @@
 /**
- * Host half of @local/dsh-progress-nudge.
+ * Host half of kiru-progress-bar.
  *
  * 两件事：
  *   1. 自上次汇报起累计经过 `timeThresholdSeconds` 秒 → 提醒 Agent 汇报进度；
@@ -19,7 +19,7 @@
  *     （DSH 的 `brandString` 是恒等函数，uuid 字符串可直接用）。
  * 只依赖 node 内建模块，插件因此可以在任何部署里加载。
  *
- * @module @local/dsh-progress-nudge
+ * @module kiru-progress-bar
  */
 import { randomUUID } from 'node:crypto'
 

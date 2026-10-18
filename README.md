@@ -1,4 +1,4 @@
-# dsh-progress-nudge
+# kiru-progress-bar
 
 让 Agent 在长回合里**主动、简短地汇报进度**的 DeepSeek Harness 插件。
 
@@ -235,7 +235,7 @@ key 存在哪、走不走中转，都和它无关。
 
 ## 安装
 
-完整步骤见 [INSTALL.md](INSTALL.md)。三步：把包放进 profile 的 `node_modules/@local/`、
+完整步骤见 [INSTALL.md](INSTALL.md)。三步：把包放进 profile 的 `node_modules/`、
 在 profile 的 `package.json` 里登记两处、重启 DeepSeek Harness。
 
 > **新增 bundle 不会热加载**，必须重启才会激活。
@@ -283,7 +283,7 @@ powershell -File tools\rollback-profile.ps1
 ```
 
 会还原 profile 的 `package.json`、移除 junction。还原后重启 App 即彻底卸载。
-（也可以只把 `dsh.profile.bundles` 里的 `@local/dsh-progress-nudge` 删掉再重启。）
+（也可以只把 `dsh.profile.bundles` 里的 `kiru-progress-bar` 删掉再重启。）
 
 ## 开发备注
 
@@ -299,13 +299,13 @@ powershell -File tools\rollback-profile.ps1
 
 **实测**：插件里 `import z from '@deepseek-ai/schemastery'` 会让整个插件挂掉，
 宿主只在 stderr 报一行
-`progress-nudge (@local/dsh-progress-nudge): failed to import`。
+`progress-nudge (kiru-progress-bar): failed to import`。
 
 原因两层：
 
 1. 宿主对 profile 插件的裸依赖不保证解析；
 2. 更隐蔽的一层：**Node 按「真实路径」解析依赖**。本插件用 junction 挂在
-   `<profile>\node_modules\@local\` 下，真实路径是 `F:\...`，于是 Node 从 `F:\`
+   `<profile>\node_modules\` 下，真实路径是 `F:\...`，于是 Node 从 `F:\`
    往上找 `node_modules`，永远走不到 `%USERPROFILE%\.dsh\profiles\node_modules`
    （那里其实躺着 react、express、`@deepseek-ai/*` 一大票包）。pnpm 装的包因为
    realpath 落在 profile 内部，所以没这个问题。
