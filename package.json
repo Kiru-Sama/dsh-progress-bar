@@ -1,6 +1,6 @@
 {
   "name": "kiru-progress-bar",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "Progress nudge for DeepSeek Harness: remind the agent to report progress after N steps or N seconds, with a live sidebar panel",
   "keywords": [

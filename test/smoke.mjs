@@ -723,7 +723,34 @@ function routeCall(ctx, method, payload, headers = { host: 'localhost' }) {
   assert.match(alert, /充值余额只剩 ¥1\.00/, `recharge 口径的主语必须是"充值余额"，实际: ${alert}`)
   assert.match(alert, /另有赠送 ¥92\.52，可用合计 ¥93\.52/, `应交代赠金与总额，实际: ${alert}`)
   assert.ok(!/可用余额只剩 ¥93\.52/.test(alert), '不能说"可用余额只剩 ¥93.52"这种误导话术')
-  console.log('✅ 24. 赠金与口径（默认按可用总额；主语随口径变化）')
+  // 赠金为 0 时不该写「赠送 ¥0.00」——那是噪音（用户截图里就出现过）
+  {
+    const c = makeCtx()
+    c.services.deepseekAccount = {
+      getBalance: async () => ({
+        status: 'ready',
+        value: [{ currency: 'CNY', balance: '10.68' }],
+        bonusWallets: [{ currency: 'CNY', balance: '0.0000000' }],
+      }),
+      getState: async () => ({ links: { topUpUrl: '' } }),
+    }
+    apply(
+      c,
+      baseConfig({
+        stepThreshold: 999,
+        timeThresholdSeconds: 9999,
+        balance: { enabled: true, thresholdCny: 100, checkSeconds: 30, repeatSeconds: 1800, includeInReport: true, scope: 'total' },
+      }),
+    )
+    await sleep(60)
+    const snap = (await routeCall(c, 'status')).body.value.balance
+    assert.equal(snap.bonusText, null, '赠金为 0 时不该当成有赠金')
+    assert.equal(snap.totalText, '¥10.68', '总额 = 充值 + 0，不受影响')
+    const alert = (await runTool(c, {}, 'read')).additionalContexts?.[0]?.content?.[0]?.text ?? ''
+    assert.ok(!/赠送 ¥0\.00/.test(alert), `低额文案里不该出现「赠送 ¥0.00」，实际: ${alert}`)
+  }
+
+  console.log('✅ 24. 赠金与口径（默认按可用总额；主语随口径变化；赠金为 0 不显示）')
 }
 
 // ---------------------------------------------------------------- 25. 峰谷时段（官方口径）

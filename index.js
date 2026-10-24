@@ -557,7 +557,8 @@ export function apply(ctx, rowConfig) {
         amount: rechargeAmount,
         /** 赠送钱包（CNY 合计） */
         bonusWallets,
-        bonusText: bonusCny.length > 0 ? `¥${bonusAmount.toFixed(2)}` : null,
+        // 赠金为 0 时当成「没有赠金」：`赠送 ¥0.00` 只是噪音，不如不写。
+        bonusText: bonusAmount > 0 ? `¥${bonusAmount.toFixed(2)}` : null,
         bonusAmount,
         /** 可用总额 = 充值 + 赠送 */
         totalText: `¥${totalAmount.toFixed(2)}`,
