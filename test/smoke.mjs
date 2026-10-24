@@ -807,4 +807,71 @@ function routeCall(ctx, method, payload, headers = { host: 'localhost' }) {
   console.log('✅ 26. 账户服务后挂载时可恢复（unavailable → ok）')
 }
 
+// ---------------------------------------------------------------- 27. 充值后也要告诉模型
+{
+  // 用户充值后，模型如果还按「余额不足」的记忆行事，就会继续催充值。
+  // 所以「低额 → 恢复」必须也投递一条通知。
+  let amount = '1.00'
+  const ctx = makeCtx()
+  ctx.services.deepseekAccount = {
+    getBalance: async () => ({ status: 'ready', value: [{ currency: 'CNY', balance: amount }], bonusWallets: [] }),
+    getState: async () => ({ links: { topUpUrl: 'https://platform.deepseek.com/top_up' } }),
+  }
+  apply(
+    ctx,
+    baseConfig({
+      stepThreshold: 999,
+      timeThresholdSeconds: 9999,
+      minGapSeconds: 0,
+      balance: {
+        enabled: true,
+        thresholdCny: 1.5,
+        checkSeconds: 30,
+        repeatSeconds: 1800,
+        includeInReport: true,
+        scope: 'total',
+      },
+    }),
+  )
+  await sleep(60)
+  const agent = {}
+  const textsOf = (out) => (out.additionalContexts ?? []).map((m) => m.content[0].text)
+
+  // 1) 低额 → 先给模型一条「余额不足」
+  const before = textsOf(await runTool(ctx, agent, 'read'))
+  assert.ok(before.some((s) => s.includes('余额不足')), `应先是低额提醒，实际: ${JSON.stringify(before)}`)
+
+  // 2) 用户充值到 11.45，手动刷一次（面板打开 / ↻ 走的就是这条路）
+  amount = '11.45'
+  await routeCall(ctx, 'balance')
+
+  // 3) 下一次工具调用要把「恢复」告诉模型
+  const after = textsOf(await runTool(ctx, agent, 'read'))
+  const recovery = after.find((s) => s.includes('余额已恢复'))
+  assert.ok(recovery !== undefined, `充值后应给模型一条恢复通知，实际: ${JSON.stringify(after)}`)
+  assert.match(recovery, /¥11\.45/, '恢复通知要带新的可用余额')
+  assert.match(recovery, /高于阈值 ¥1\.5/, '要说明已经高于阈值')
+  assert.match(recovery, /不要再提|不要再催/, '要明确让模型停止催充值')
+  assert.match(recovery, /现在是 \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/, '恢复通知也要带系统时间')
+
+  const snapshot = (await routeCall(ctx, 'status')).body.value.balance
+  assert.equal(snapshot.low, false, '恢复后 low 应为 false')
+  assert.equal(snapshot.recoveries, 1, '恢复次数应记为 1')
+  assert.equal(snapshot.lastRecovery.totalText, '¥11.45', '快照要留下恢复详情给界面')
+
+  // 4) 只发一次，不许重复刷
+  const twice = textsOf(await runTool(ctx, agent, 'read'))
+  assert.equal(twice.filter((s) => s.includes('余额已恢复')).length, 0, '恢复通知不该重复发')
+
+  // 5) 再次掉下去应该能立刻提醒（恢复时已清掉 repeatSeconds 冷却）
+  amount = '0.50'
+  await routeCall(ctx, 'balance')
+  const dropped = textsOf(await runTool(ctx, agent, 'read'))
+  assert.ok(
+    dropped.some((s) => s.includes('余额不足')),
+    `恢复后再次低额应能立刻重新提醒（否则会被 1800 秒冷却吞掉），实际: ${JSON.stringify(dropped)}`,
+  )
+  console.log('✅ 27. 充值后通知模型（低额 → 恢复 → 再降可立刻重新提醒）')
+}
+
 console.log('\n全部通过 ✅')

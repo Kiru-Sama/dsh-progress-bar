@@ -243,6 +243,14 @@ const TEXT = {
     /** 追加在进度汇报末尾的余额提示（仅在低于阈值时）。 */
     balanceLine: (v) =>
       `（${v.subjectText}${v.detailText ? `，${v.detailText}` : ''}，已低于阈值 ${v.thresholdText}）`,
+    /**
+     * 余额从「不足」回到「正常」时投递的一条。
+     *
+     * 缺了这条，模型会一直按「余额不足」的记忆行事——用户充完值还在被催充值。
+     */
+    balanceRecovered: (v) =>
+      `【余额已恢复】现在是 ${v.now}（${v.weekday}）｜可用余额已回到 ${v.totalText}（${v.sourceText}），高于阈值 ${v.thresholdText}。\n` +
+      `用户已经充值了。之前那条「余额不足」作废，不要再提、也不要再催充值；若刚才因此中断了什么，可以继续。`,
   },
   en: {
     first: (v) =>
@@ -271,6 +279,11 @@ const TEXT = {
       `Then keep working — do not stop and wait for a reply.`,
     balanceLine: (v) =>
       ` (${v.subjectText}${v.detailText ? `, ${v.detailText}` : ''}, below the ${v.thresholdText} threshold)`,
+    balanceRecovered: (v) =>
+      `[Balance restored] It is now ${v.now} (${v.weekday}) — the usable balance is back to ${v.totalText} ` +
+      `(${v.sourceText}), above the ${v.thresholdText} threshold.\n` +
+      `The user has topped up. Drop the earlier "low balance" note, stop asking them to top up, ` +
+      `and continue anything that was interrupted.`,
   },
 }
 
@@ -470,7 +483,7 @@ export function apply(ctx, rowConfig) {
   const states = new Map()
 
   /** 给页面看的统计数据。 */
-  const stats = { nudges: 0, resets: 0, spoke: 0, balanceAlerts: 0 }
+  const stats = { nudges: 0, resets: 0, spoke: 0, balanceAlerts: 0, balanceRecoveries: 0 }
 
   // ---------------------------------------------------------------- 余额监控
 
@@ -487,6 +500,18 @@ export function apply(ctx, rowConfig) {
 
   /** 最近一次余额提醒的详情，给界面显示用。 */
   let lastBalanceNotice = null
+
+  /**
+   * 上一次读数的「是否低额」。`null` = 还没有过有效读数（不知道），
+   * 所以启动时读到低额不会被误判成「从正常掉下来」。
+   */
+  let lastLowSeen = null
+
+  /** 检测到「低额 → 恢复」，攒着等下一个步骤边界投递。 */
+  let pendingRecovery = null
+
+  /** 最近一次恢复通知的详情，给界面显示用。 */
+  let lastBalanceRecovery = null
 
   async function refreshBalance() {
     if (effective('balance').enabled !== true) return
@@ -523,7 +548,7 @@ export function apply(ctx, rowConfig) {
       } catch {
         /* 拿不到充值链接不影响余额判断 */
       }
-      balanceState = {
+      const next = {
         status: 'ok',
         checkedAt: Date.now(),
         wallet: cny,
@@ -539,6 +564,10 @@ export function apply(ctx, rowConfig) {
         totalAmount,
         topUpUrl,
       }
+      // 先比较「上一次」和「这一次」的低额状态，再把新读数落地——
+      // 顺序反了就拿不到翻转信息了。
+      noteBalanceTransition(next)
+      balanceState = next
     } catch (failure) {
       balanceState = { status: 'failed', reason: String(failure?.message ?? failure), checkedAt: Date.now() }
     }
@@ -560,11 +589,82 @@ export function apply(ctx, rowConfig) {
    */
   function balanceLow() {
     if (effective('balance').enabled !== true) return false
-    if (balanceState.status !== 'ok' || !balanceFresh()) return false
-    const scope = effective('balance').scope
-    const value = scope === 'recharge' ? balanceState.amount : balanceState.totalAmount
-    if (typeof value !== 'number' || !Number.isFinite(value)) return false
-    return value <= effective('balance').thresholdCny
+    if (!balanceFresh()) return false
+    return computeLow(balanceState, effective('balance')) === true
+  }
+
+  /**
+   * 纯函数：给定一份读数判断是否低额。读不到返回 `null`（不知道）。
+   * 单独抽出来，是为了能在读数落地**之前**比较新旧状态。
+   */
+  function computeLow(state, cfg) {
+    if (state.status !== 'ok') return null
+    const value = cfg.scope === 'recharge' ? state.amount : state.totalAmount
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null
+    return value <= cfg.thresholdCny
+  }
+
+  /**
+   * 记录「低额 ↔ 正常」的状态翻转。
+   *
+   * 只报「变低」不够：用户充值后模型并不知道，还会继续按「余额不足」的记忆
+   * 催人充值。所以「低额 → 恢复」也要留一条待投递的通知。
+   */
+  function noteBalanceTransition(next) {
+    const nowLow = computeLow(next, effective('balance'))
+    // 读不到就当没发生过，不要拿"不知道"去翻转状态
+    if (nowLow === null) return
+    if (lastLowSeen === true && nowLow === false) {
+      pendingRecovery = {
+        at: Date.now(),
+        totalText: next.totalText,
+        rechargeText: next.text,
+        bonusText: next.bonusText,
+      }
+      // 恢复后清掉冷却：万一下次又掉下去，应该立刻提醒而不是等 repeatSeconds
+      lastBalanceAlertAt = 0
+    }
+    lastLowSeen = nowLow
+  }
+
+  /**
+   * 余额从「不足」回到「正常」时通知模型。
+   * 和余额提醒一样，只能在步骤边界投递。
+   */
+  function balanceRecoveryNotice(now) {
+    if (pendingRecovery === null) return undefined
+    const b = effective('balance')
+    if (b.enabled !== true) {
+      pendingRecovery = null
+      return undefined
+    }
+    const recovered = pendingRecovery
+    pendingRecovery = null
+
+    const locale = effective('locale')
+    const t = template(locale)
+    const nowDate = new Date(now)
+    const sourceText = recovered.bonusText
+      ? `充值 ${recovered.rechargeText ?? '—'} + 赠送 ${recovered.bonusText}`
+      : `充值 ${recovered.rechargeText ?? '—'}`
+    const values = {
+      now: stamp(nowDate),
+      weekday: weekday(nowDate, locale),
+      totalText: recovered.totalText,
+      sourceText,
+      thresholdText: `¥${b.thresholdCny}`,
+    }
+    const text = t.balanceRecovered(values)
+    stats.balanceRecoveries += 1
+    lastBalanceRecovery = {
+      seq: (lastBalanceRecovery?.seq ?? 0) + 1,
+      at: now,
+      totalText: recovered.totalText,
+      threshold: b.thresholdCny,
+      summary: `${recovered.totalText} > ¥${b.thresholdCny}`,
+      message: text,
+    }
+    return createNotice(text, `balance restored ${recovered.totalText ?? ''}`.trim())
   }
 
   /** 服务还没挂上时的重试间隔——比正常轮询快得多。 */
@@ -912,6 +1012,10 @@ export function apply(ctx, rowConfig) {
     const balance = balanceNotice(now)
     if (balance !== undefined) notices.push(balance)
 
+    // ---- 余额恢复（用户充值后告诉模型：别再催了）----
+    const recovery = balanceRecoveryNotice(now)
+    if (recovery !== undefined) notices.push(recovery)
+
     return notices
   }
 
@@ -1236,7 +1340,10 @@ export function apply(ctx, rowConfig) {
       /** 读数是否够新。 */
       fresh: balanceFresh(),
       lastNotice: lastBalanceNotice,
+      /** 最近一次「充值后恢复」的详情，界面用它闪一下绿色确认。 */
+      lastRecovery: lastBalanceRecovery,
       alerts: stats.balanceAlerts,
+      recoveries: stats.balanceRecoveries,
     }
   }
 }

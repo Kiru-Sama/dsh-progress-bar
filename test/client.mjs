@@ -212,6 +212,77 @@ hookState.slots[0] = { nudge: sampleNudge, pending: { due: true, overSeconds: 13
 hookState.slots[3] = sampleNudge.seq
 assert.ok(textOf(Banner({})).includes('已到期'), '越界优先于手动关闭')
 
+// ---------------------------------------------------------------- 余额：低额与恢复
+{
+  // 低额横幅显示的数字必须跟判定口径一致（有赠金时充值余额 ≠ 可用总额）
+  hookState.cursor = 0
+  hookState.slots.length = 0
+  hookState.slots[0] = {
+    nudge: null,
+    balance: { enabled: true, status: 'ok', low: true, scope: 'total', text: '¥0.50', totalText: '¥0.80', thresholdCny: 1.5 },
+  }
+  const lowTree = Banner({})
+  const lowText = textOf(lowTree)
+  assert.ok(lowText.includes('余额不足'), `低额应提示，实际: ${lowText}`)
+  assert.ok(lowText.includes('¥0.80'), `scope=total 时应显示可用总额，实际: ${lowText}`)
+  assert.ok(!lowText.includes('¥0.50'), `不该显示充值余额（口径是 total），实际: ${lowText}`)
+  assert.ok(lowText.includes('可用余额 ≤ ¥1.5'), `应写明口径与阈值，实际: ${lowText}`)
+
+  // scope=recharge 时反过来显示充值余额
+  hookState.cursor = 0
+  hookState.slots.length = 0
+  hookState.slots[0] = {
+    nudge: null,
+    balance: { enabled: true, status: 'ok', low: true, scope: 'recharge', text: '¥0.50', totalText: '¥0.80', thresholdCny: 1.5 },
+  }
+  const rechargeText = textOf(Banner({}))
+  assert.ok(rechargeText.includes('¥0.50'), `scope=recharge 时应显示充值余额，实际: ${rechargeText}`)
+  assert.ok(rechargeText.includes('充值 ≤ ¥1.5'), `口径标签应跟着变，实际: ${rechargeText}`)
+
+  // 刚充值恢复 → 绿色确认
+  hookState.cursor = 0
+  hookState.slots.length = 0
+  hookState.slots[0] = {
+    nudge: null,
+    balance: {
+      enabled: true,
+      status: 'ok',
+      low: false,
+      scope: 'total',
+      text: '¥11.45',
+      totalText: '¥11.45',
+      thresholdCny: 1.5,
+      lastRecovery: { seq: 1, at: Date.now(), totalText: '¥11.45', threshold: 1.5 },
+    },
+  }
+  const restoredTree = Banner({})
+  const restoredText = textOf(restoredTree)
+  assert.ok(restoredText.includes('余额已恢复'), `充值后应给绿色确认，实际: ${restoredText}`)
+  assert.ok(restoredText.includes('¥11.45'), `确认里应带新的余额，实际: ${restoredText}`)
+  assert.ok(restoredText.includes('可用余额 > ¥1.5'), `应说明已高于阈值，实际: ${restoredText}`)
+  assert.ok(
+    collect(restoredTree).some((n) => n.props?.className?.includes('is-ok')),
+    '恢复确认应带 is-ok 配色',
+  )
+
+  // 恢复确认只闪一小会儿，过期后横幅应当消失
+  hookState.cursor = 0
+  hookState.slots.length = 0
+  hookState.slots[0] = {
+    nudge: null,
+    balance: {
+      enabled: true,
+      status: 'ok',
+      low: false,
+      scope: 'total',
+      totalText: '¥11.45',
+      thresholdCny: 1.5,
+      lastRecovery: { seq: 1, at: Date.now() - 60_000, totalText: '¥11.45', threshold: 1.5 },
+    },
+  }
+  assert.equal(Banner({}), null, '恢复确认过期后不该继续占地方')
+}
+
 // ---------------------------------------------------------------- 渲染断言
 
 const Panel = registered.get('sidebar.footer.action').Component

@@ -52,6 +52,7 @@ window.__ModuleLoader__.load({
       balanceUnavailable: '不可用',
       balanceFailed: '查询失败',
       balanceLow: '余额不足',
+      balanceRestored: '余额已恢复',
       balanceLabel: '余额低于多少提醒',
       tariff: '时段',
       tariffPeak: '高峰·原价',
@@ -92,6 +93,7 @@ window.__ModuleLoader__.load({
       balanceUnavailable: 'unavailable',
       balanceFailed: 'query failed',
       balanceLow: 'Low balance',
+      balanceRestored: 'Balance restored',
       balanceLabel: 'Warn below this balance',
       balanceRecharge: 'recharge',
       balanceBonus: 'bonus',
@@ -269,6 +271,12 @@ window.__ModuleLoader__.load({
   border-color: var(--dsw-alias-state-warn-label);
 }
 .pn-banner.is-overdue i { background: var(--dsw-alias-state-warn-label); }
+/* 余额刚恢复：绿色确认，说明插件已识别并把结果告知模型 */
+.pn-banner.is-ok {
+  color: var(--dsw-alias-state-success-primary);
+  border-color: var(--dsw-alias-state-success-primary);
+}
+.pn-banner.is-ok i { background: var(--dsw-alias-state-success-primary); }
 @keyframes pn-banner-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .pn-banner i {
   width: 6px; height: 6px; border-radius: 50%; flex: none;
@@ -703,22 +711,41 @@ window.__ModuleLoader__.load({
         const overdue = pending?.due === true
         // 余额低于阈值：持续显示，直到充值到阈值以上。
         const lowBalance = balance?.low === true
+        // 刚充值恢复：闪一下绿色确认——告诉用户插件已识别，并且已经把这件事告知模型了。
+        const recovery = balance?.lastRecovery ?? null
+        const justRecovered =
+          recovery !== null && typeof recovery.at === 'number' && Date.now() - recovery.at < 15000
 
         // 什么都没有时不占地方。
-        if (nudge === null && !overdue && !lowBalance) return null
-        // 手动关掉之后，一直藏到下一次提醒为止；但"待发/余额不足"这类状态关不掉。
-        if (nudge !== null && nudge.seq <= hiddenSeq && !overdue && !lowBalance) return null
+        if (nudge === null && !overdue && !lowBalance && !justRecovered) return null
+        // 手动关掉之后，一直藏到下一次提醒为止；但"待发/余额不足/刚恢复"这类状态关不掉。
+        if (nudge !== null && nudge.seq <= hiddenSeq && !overdue && !lowBalance && !justRecovered) {
+          return null
+        }
 
         const warn = !flash && (lowBalance || overdue)
-        const className = `pn-banner${flash ? ' is-flash' : ''}${warn ? ' is-overdue' : ''}`
+        const confirmed = !flash && !warn && justRecovered
+        const className = `pn-banner${flash ? ' is-flash' : ''}${warn ? ' is-overdue' : ''}${
+          confirmed ? ' is-ok' : ''
+        }`
         let content
         if (flash && nudge !== null) {
           content = [t.nudgeFired + ' · ', h('b', { key: 's' }, nudge.summary ?? '')]
         } else if (lowBalance) {
+          // ⚠️ 显示的数字必须跟判定口径一致：scope=recharge 时看充值余额，
+          // 否则看可用总额。之前一律显示充值余额，有赠金时数字是错的。
+          const shown = balance.scope === 'recharge' ? balance.text : balance.totalText
+          const what = balance.scope === 'recharge' ? t.balanceRecharge : t.balance
           content = [
             t.balanceLow + ' ',
-            h('b', { key: 'b' }, balance.text ?? '—'),
-            ` · ${t.balance} ≤ ¥${balance.thresholdCny}`,
+            h('b', { key: 'b' }, shown ?? '—'),
+            ` · ${what} ≤ ¥${balance.thresholdCny}`,
+          ]
+        } else if (justRecovered) {
+          content = [
+            t.balanceRestored + ' ',
+            h('b', { key: 'r' }, recovery.totalText ?? '—'),
+            ` · ${t.balance} > ¥${balance.thresholdCny}`,
           ]
         } else if (overdue) {
           content = [
