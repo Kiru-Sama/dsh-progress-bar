@@ -59,6 +59,14 @@ window.__ModuleLoader__.load({
       tariffOff: '低谷·半价',
       tariffNext: '下一次切换',
       tariffHolidaysHint: '未配置节假日，仅按周末与时段判断',
+      escalation: '增强提醒',
+      escalationOn: '开',
+      escalationOff: '关',
+      escalationHint: '连续几次提醒都没换来汇报时，自动提高阈值并加重措辞；一旦汇报就复位',
+      escalationIdle: '正常：按设定阈值提醒',
+      escalationActive: '已升级',
+      escalationDisabled: '关着：始终按固定阈值提醒',
+      escalationStreak: '连续未汇报',
       refresh: '刷新',
       dismiss: '关闭',
     }
@@ -102,6 +110,14 @@ window.__ModuleLoader__.load({
       tariffOff: 'off-peak · half price',
       tariffNext: 'Next switch',
       tariffHolidaysHint: 'No holidays configured; weekday/weekend only',
+      escalation: 'Escalate',
+      escalationOn: 'on',
+      escalationOff: 'off',
+      escalationHint: 'After several nudges without a report, raise thresholds and harden the wording; resets once the agent reports',
+      escalationIdle: 'Normal: fixed thresholds',
+      escalationActive: 'escalated',
+      escalationDisabled: 'Off: fixed thresholds only',
+      escalationStreak: 'unanswered in a row',
       refresh: 'Refresh',
       dismiss: 'Dismiss',
     }
@@ -245,6 +261,8 @@ window.__ModuleLoader__.load({
   color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 1;
 }
 .pn-mini:hover { color: var(--dsw-alias-label-primary); }
+/* 开关处于「开」时给个绿点暗示，别只靠 开/关 两个字 */
+.pn-mini.is-on { color: var(--dsw-alias-state-success-primary); font-weight: 600; }
 .pn-sub {
   margin: -2px 0 6px; font-size: 11px; line-height: 16px;
   color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums;
@@ -353,8 +371,16 @@ window.__ModuleLoader__.load({
         }, [open])
 
         const live = status?.live ?? null
-        const stepTarget = status?.effective?.stepThreshold ?? 10
-        const timeTarget = status?.effective?.timeThresholdSeconds ?? 120
+        // 自适应退避会把阈值放大；面板上的进度必须按**实际生效**的值显示，
+        // 否则退避抬高后进度条会一直卡在 100% 却等不到提醒。
+        const escalation = status?.escalation ?? null
+        const escalated = escalation?.enabled === true && escalation.active === true
+        const stepTarget = escalated
+          ? escalation.stepThreshold
+          : (status?.effective?.stepThreshold ?? 10)
+        const timeTarget = escalated
+          ? escalation.timeThresholdSeconds
+          : (status?.effective?.timeThresholdSeconds ?? 120)
         const enabled = status?.enabled !== false
         /** 时钟是否在走：暂停或回合结束都会是 false，此时主机给的秒数是定值。 */
         const running = enabled && live?.running === true
@@ -541,6 +567,31 @@ window.__ModuleLoader__.load({
                   { className: 'pn-row' },
                   h('span', null, t.nudges),
                   h('span', null, `${status?.stats?.nudges ?? 0} · ${t.spoken} ${status?.stats?.spoke ?? 0}`),
+                ),
+                // 增强提醒（自适应退避）：连续没换来汇报就抬阈值 + 加重措辞
+                h(
+                  'div',
+                  { className: 'pn-row' },
+                  h('span', null, t.escalation),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: `pn-mini${escalation?.enabled === true ? ' is-on' : ''}`,
+                      title: t.escalationHint,
+                      onClick: () => void apply({ escalationEnabled: escalation?.enabled !== true }),
+                    },
+                    escalation?.enabled === true ? t.escalationOn : t.escalationOff,
+                  ),
+                ),
+                h(
+                  'div',
+                  { className: escalated ? 'pn-sub is-warn' : 'pn-sub' },
+                  escalation?.enabled !== true
+                    ? t.escalationDisabled
+                    : escalated
+                      ? `${t.escalationActive} ${escalation.level} · ${escalation.silentStreak} ${t.escalationStreak} → ${escalation.stepThreshold}${t.unitSteps} / ${escalation.timeThresholdSeconds}${t.unitSeconds}`
+                      : t.escalationIdle,
                 ),
                 // 余额（来自宿主的 deepseekAccount 服务）
                 h(

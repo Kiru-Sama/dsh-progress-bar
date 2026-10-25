@@ -49,6 +49,26 @@ export const DEFAULTS = {
   /** 提醒文案语言：zh | en。 */
   locale: 'zh',
   /**
+   * 自适应退避（增强提醒）。
+   *
+   * 为什么需要：真机日志里发现，模型跑进「只调工具不说话」的模式后，
+   * 提示频率再高也换不来一句汇报（某会话 487 次提醒里，末期合规率只有 31%）。
+   * 此时**提高频率只会变成噪音**，正确做法是反过来：拉长间隔 + 加重措辞。
+   * 一旦它真的汇报了，立刻复位。
+   */
+  escalation: {
+    /** 是否启用。侧栏面板上的「增强提醒」开关控制的就是这一项。 */
+    enabled: true,
+    /** 连续多少次「提醒了但没换来文字」开始升级。 */
+    afterNudges: 2,
+    /** 每升一级，步数阈值乘以多少。 */
+    stepFactor: 2,
+    /** 每升一级，时间阈值乘以多少。 */
+    timeFactor: 2,
+    /** 最高升到第几级（0 表示不升）。 */
+    maxLevel: 3,
+  },
+  /**
    * 余额监控。余额由**宿主的 `deepseekAccount` 服务**提供（设置页「账号与余额」
    * 显示的就是它），插件不直接碰任何 API key，也不关心中转站。
    */
@@ -234,6 +254,22 @@ const TEXT = {
       `本回合起于 ${v.turnStart}，已跑 ${v.turnSeconds} 秒。\n` +
       `若你正卡在一个很慢的操作上，说明它在做什么、预计还要多久；` +
       `若只是正常推进，一句话带过即可，然后继续。`,
+    /**
+     * 升级档文案（自适应退避）。
+     *
+     * 基线文案末尾那句「汇报完继续执行」等于给了模型一个跳过汇报的许可——
+     * 真机日志里它就是这么跳过的。升级档把「必须先说话」写成硬要求，
+     * 并且去掉任何可以理解为「继续干活就行」的措辞。
+     */
+    escalated: (v) =>
+      v.level >= 2
+        ? `【进度汇报 · 强制】现在是 ${v.now}（${v.weekday}）｜已连续 ${v.streak} 次没有向用户汇报，用户那边看不到任何进展` +
+          `（本次累计 ${v.steps} 步 / ${v.seconds} 秒，本回合已跑 ${v.turnSeconds} 秒）。\n` +
+          `硬性要求：调用下一个工具之前，先写 1-2 行文字说明【做完了什么 / 卡在哪 / 下一步】，然后再继续。\n` +
+          `只调工具不说话 = 没完成这条要求。`
+        : `【进度汇报 · 未响应】现在是 ${v.now}（${v.weekday}）｜你已经连续 ${v.streak} 次没有向用户汇报` +
+          `（本次累计 ${v.steps} 步 / ${v.seconds} 秒，本回合已跑 ${v.turnSeconds} 秒）。\n` +
+          `这一轮请**先输出 1-2 行文字**，再调用任何工具；只调工具不说话的，等于没汇报。`,
     /** 余额低于阈值时单独发的一条。 */
     balanceAlert: (v) =>
       `【余额不足】现在是 ${v.now}（${v.weekday}）｜${v.subjectText}，已低于你设定的 ${v.thresholdText}。\n` +
@@ -271,6 +307,15 @@ const TEXT = {
       `(only ${v.steps} steps); this turn started at ${v.turnStart} and has run ${v.turnSeconds}s.\n` +
       `If you are stuck on a slow operation, say what it is and how much longer it needs; ` +
       `if things are simply progressing, one line is enough, then continue.`,
+    escalated: (v) =>
+      v.level >= 2
+        ? `[Progress check · MANDATORY] It is now ${v.now} (${v.weekday}) — ${v.streak} nudges in a row went unanswered; ` +
+          `the user has no visibility into progress (${v.steps} steps / ${v.seconds}s, turn running ${v.turnSeconds}s).\n` +
+          `Hard requirement: before calling the next tool, write 1-2 lines covering [what is done / where you are stuck / next step].\n` +
+          `Calling a tool without that text counts as not done.`
+        : `[Progress check · unanswered] It is now ${v.now} (${v.weekday}) — ${v.streak} nudges in a row went unanswered ` +
+          `(${v.steps} steps / ${v.seconds}s, turn running ${v.turnSeconds}s).\n` +
+          `This time, write 1-2 lines of text **before** calling any tool; tool calls without text do not count as a report.`,
     balanceAlert: (v) =>
       `[Low balance] It is now ${v.now} (${v.weekday}) — ${v.subjectText}, below your ${v.thresholdText} threshold.\n` +
       (v.detailText ? `${v.detailText}\n` : '') +
@@ -384,6 +429,27 @@ function validate(config) {
       throw new Error(`progress-nudge: 非法节假日 ${JSON.stringify(day)} —— 需要 YYYY-MM-DD（北京时间）`)
     }
   }
+
+  // 自适应退避
+  const esc = config.escalation
+  if (esc === null || typeof esc !== 'object') {
+    throw new Error('progress-nudge: 非法配置 escalation —— 必须是对象')
+  }
+  if (typeof esc.enabled !== 'boolean') {
+    throw new Error(`progress-nudge: 非法配置 escalation.enabled=${esc.enabled} —— 必须是布尔值`)
+  }
+  if (!Number.isInteger(esc.afterNudges) || esc.afterNudges < 1) {
+    throw new Error(`progress-nudge: 非法配置 escalation.afterNudges=${esc.afterNudges} —— 必须是 >= 1 的整数`)
+  }
+  if (!Number.isInteger(esc.maxLevel) || esc.maxLevel < 0 || esc.maxLevel > 10) {
+    throw new Error(`progress-nudge: 非法配置 escalation.maxLevel=${esc.maxLevel} —— 必须是 0..10 的整数`)
+  }
+  for (const key of ['stepFactor', 'timeFactor']) {
+    const value = esc[key]
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 1) {
+      throw new Error(`progress-nudge: 非法配置 escalation.${key}=${value} —— 必须是 >= 1 的数字`)
+    }
+  }
 }
 
 // ---------------------------------------------------------------- 余额
@@ -469,6 +535,7 @@ export function apply(ctx, rowConfig) {
     ...(rowConfig ?? {}),
     balance: { ...DEFAULTS.balance, ...(rowConfig?.balance ?? {}) },
     tariff: { ...DEFAULTS.tariff, ...(rowConfig?.tariff ?? {}) },
+    escalation: { ...DEFAULTS.escalation, ...(rowConfig?.escalation ?? {}) },
   }
   validate(config)
 
@@ -483,7 +550,7 @@ export function apply(ctx, rowConfig) {
   const states = new Map()
 
   /** 给页面看的统计数据。 */
-  const stats = { nudges: 0, resets: 0, spoke: 0, balanceAlerts: 0, balanceRecoveries: 0 }
+  const stats = { nudges: 0, resets: 0, spoke: 0, balanceAlerts: 0, balanceRecoveries: 0, escalatedNudges: 0 }
 
   // ---------------------------------------------------------------- 余额监控
 
@@ -758,6 +825,13 @@ export function apply(ctx, rowConfig) {
         turn: undefined,
         recentTools: [],
         root: undefined,
+        /**
+         * 自上次「模型对用户说话」以来，已经投递了几次提醒。
+         *
+         * 这是自适应退避的驱动量：模型一直闷头干活不汇报 → 这个数一直涨 →
+         * 阈值被抬高、措辞变强；一旦它真的汇报了，立刻归零。
+         */
+        silentStreak: 0,
       }
       states.set(agent, state)
     }
@@ -841,6 +915,46 @@ export function apply(ctx, rowConfig) {
 
   function excluded(toolName) {
     return effective('exclude').includes(toolName)
+  }
+
+  // ---------------------------------------------------------------- 自适应退避
+
+  /**
+   * 自适应退避的等级（增强提醒）。
+   *
+   * 输入是「这一条提醒之后，连续有多少条没换来文字」。等级越高：
+   *   - 阈值被放大（提醒更稀疏）——高频提醒在模型不听时只会变成噪音
+   *   - 文案换成硬要求（禁用「汇报完继续执行」那种可跳过的措辞）
+   *
+   * 关闭时永远返回 0，行为退回原样。
+   */
+  function escalationLevelOf(streak) {
+    const cfg = effective('escalation')
+    if (cfg.enabled !== true) return 0
+    const after = Math.max(1, cfg.afterNudges)
+    const raw = Math.floor(streak / after)
+    return Math.min(Math.max(0, cfg.maxLevel), Math.max(0, raw))
+  }
+
+  /**
+   * 这一轮实际生效的阈值（随等级放大）。
+   *
+   * 注意读的是 `state.silentStreak`（**这一条之前**的沉默连击数）——
+   * 所以等级只影响「下一次什么时候触发」，不会让本次触发条件自己抬高。
+   */
+  function escalatedThresholds(state) {
+    const cfg = effective('escalation')
+    const level = escalationLevelOf(state.silentStreak)
+    const stepBase = effective('stepThreshold')
+    const timeBase = effective('timeThresholdSeconds')
+    if (level === 0) {
+      return { stepThreshold: stepBase, timeThresholdSeconds: timeBase, level: 0 }
+    }
+    return {
+      stepThreshold: Math.round(stepBase * Math.pow(cfg.stepFactor, level)),
+      timeThresholdSeconds: Math.round(timeBase * Math.pow(cfg.timeFactor, level)),
+      level,
+    }
   }
 
   function publish(state) {
@@ -944,9 +1058,11 @@ export function apply(ctx, rowConfig) {
     const withinCap = state.nudgeCount < effective('maxPerTurn')
     const pastGap = now - state.lastNudgeAt >= effective('minGapSeconds') * 1000
     if (withinCap && pastGap) {
+      // 自适应退避：连续没汇报就抬阈值（详见 escalationLevelOf）
+      const gate = escalatedThresholds(state)
       const elapsedMs = elapsedMsOf(state, now)
-      const bySteps = state.steps >= effective('stepThreshold')
-      const byTime = elapsedMs >= effective('timeThresholdSeconds') * 1000
+      const bySteps = state.steps >= gate.stepThreshold
+      const byTime = elapsedMs >= gate.timeThresholdSeconds * 1000
       if (bySteps || byTime) {
         const seconds = Math.round(elapsedMs / 1000)
         const count = state.nudgeCount + 1
@@ -954,6 +1070,9 @@ export function apply(ctx, rowConfig) {
         const t = template(locale)
         const nowDate = new Date(now)
         const turnElapsedMs = turnElapsedMsOf(state, now)
+        // 这一条投递之后，连续有多少条没换来文字（文案里要报给模型听）
+        const streak = state.silentStreak + 1
+        const level = escalationLevelOf(streak)
         const values = {
           // 真实系统时间：模型估不准自己的耗时，必须把钟递到它手上。
           now: stamp(nowDate),
@@ -966,10 +1085,15 @@ export function apply(ctx, rowConfig) {
           turnSteps: state.turnSteps,
           turnSeconds: Math.round(turnElapsedMs / 1000),
           tools: state.recentTools.join(', ') || '-',
+          streak,
+          level,
         }
 
+        // 升级档优先：连续没汇报时，普通文案里的「汇报完继续执行」会被当成
+        // 跳过许可（真机日志里就是这么跳过的），所以要换成硬要求版本。
         let text
-        if (byTime && !bySteps) text = t.time(values)
+        if (level > 0) text = t.escalated(values)
+        else if (byTime && !bySteps) text = t.time(values)
         else if (count === 1) text = t.first(values)
         else text = t.later(values)
 
@@ -989,7 +1113,10 @@ export function apply(ctx, rowConfig) {
         state.turnAnchorAt = now
         state.lastNudgeAt = now
         state.nudgeCount = count
+        // 投递成功才计入「沉默连击」；被 maxPerTurn/minGap 挡掉的不算。
+        state.silentStreak = streak
         stats.nudges += 1
+        if (level > 0) stats.escalatedNudges += 1
         publish(state)
 
         const reason = byTime && !bySteps ? `time ${seconds}s` : `step ${values.steps}`
@@ -997,6 +1124,8 @@ export function apply(ctx, rowConfig) {
           seq: (lastNudge?.seq ?? 0) + 1,
           at: now,
           count,
+          level,
+          streak,
           reason,
           trigger: byTime && !bySteps ? 'time' : 'steps',
           seconds,
@@ -1107,10 +1236,21 @@ export function apply(ctx, rowConfig) {
     const state = states.get(agent)
     if (state === undefined) return
     if (!isRoot(state, agent) && !effective('includeSubagents')) return
+
+    // 「汇报了」→ 自适应退避立刻复位（silentStreak 归零，等级回 0）。
+    // ⚠️ 必须在下面那个「还有没有东西可清」的守卫**之前**：
+    // 提醒刚投递完 steps/ms 就被清成 0，模型紧接着汇报时正好会被那个守卫
+    // 挡掉——那就会出现"明明汇报了，退避却降不下来"的怪象。
+    const resetStreak = state.silentStreak > 0
+    state.silentStreak = 0
+
     // 一次「说话」只重置一次：判断标准是"还有没有东西可清"。
     // 不能用 anchorAt 判断——现在说话后时钟是继续走的，用它会变成每来一个
     // token 就重置一次并 publish 一次。
-    if (state.steps === 0 && state.ms === 0) return
+    if (state.steps === 0 && state.ms === 0) {
+      if (resetStreak) publish(state)
+      return
+    }
 
     state.steps = 0
     state.ms = 0
@@ -1178,6 +1318,12 @@ export function apply(ctx, rowConfig) {
                   if (next.enabled === config.balance.enabled) delete overrides.balance
                   else overrides.balance = next
                 }
+                // 侧栏「增强提醒」开关
+                if (typeof body.escalationEnabled === 'boolean') {
+                  const next = { ...effective('escalation'), enabled: body.escalationEnabled }
+                  if (next.enabled === config.escalation.enabled) delete overrides.escalation
+                  else overrides.escalation = next
+                }
                 // 把值改回默认值时不留覆盖标记，`overridden` 才真正表示
                 // 「和默认值不一样」，而不是「碰过这个字段」。
                 for (const [key, value] of Object.entries(patch)) {
@@ -1230,9 +1376,12 @@ export function apply(ctx, rowConfig) {
     if (liveState === null) return null
     const now = Date.now()
     const elapsed = elapsedMsOf(liveState, now)
-    const timeLimit = effective('timeThresholdSeconds') * 1000
+    // 用**升级后**的阈值：界面上的「已到期」必须和实际触发条件一致，
+    // 否则退避抬高阈值时界面会一直喊「已到期」而提醒迟迟不来。
+    const gate = escalatedThresholds(liveState)
+    const timeLimit = gate.timeThresholdSeconds * 1000
     const byTime = elapsed >= timeLimit
-    const bySteps = liveState.steps >= effective('stepThreshold')
+    const bySteps = liveState.steps >= gate.stepThreshold
     const blocked =
       liveState.nudgeCount >= effective('maxPerTurn') ||
       now - liveState.lastNudgeAt < effective('minGapSeconds') * 1000
@@ -1271,10 +1420,41 @@ export function apply(ctx, rowConfig) {
       overridden: Object.keys(overrides),
       live: snapshotLive(),
       pending: snapshotPending(),
+      escalation: snapshotEscalation(),
       nudge: lastNudge,
       balance: snapshotBalance(),
       tariff: snapshotTariff(),
       stats: { ...stats },
+    }
+  }
+
+  /**
+   * 给界面看的自适应退避状态。
+   *
+   * `stepThreshold` / `timeThresholdSeconds` 是**当前实际生效**的阈值
+   * （已按等级放大）；面板上的输入框仍然改的是基线值。
+   */
+  function snapshotEscalation() {
+    const cfg = effective('escalation')
+    const state = liveState
+    const streak = state === null ? 0 : state.silentStreak
+    const level = escalationLevelOf(streak)
+    const gate = state === null
+      ? { stepThreshold: effective('stepThreshold'), timeThresholdSeconds: effective('timeThresholdSeconds') }
+      : escalatedThresholds(state)
+    return {
+      enabled: cfg.enabled === true,
+      afterNudges: cfg.afterNudges,
+      maxLevel: cfg.maxLevel,
+      /** 连续多少次提醒没换来文字 */
+      silentStreak: streak,
+      /** 当前等级，0 = 正常 */
+      level,
+      /** 实际生效的阈值（面板进度条按它显示） */
+      stepThreshold: gate.stepThreshold,
+      timeThresholdSeconds: gate.timeThresholdSeconds,
+      /** 这一级大概是怎么算出来的，界面可以显示「已升级」 */
+      active: level > 0,
     }
   }
 

@@ -901,4 +901,111 @@ function routeCall(ctx, method, payload, headers = { host: 'localhost' }) {
   console.log('✅ 27. 充值后通知模型（低额 → 恢复 → 再降可立刻重新提醒）')
 }
 
+// ---------------------------------------------------------------- 28. 自适应退避（增强提醒）
+{
+  // 用默认的 afterNudges=2：前两条提示不升级，第 2 条之后开始升级。
+  // （afterNudges=1 的语义是「第一条就算升级」，普通档永远不出现，不适合当默认。）
+  const ctx = makeCtx()
+  apply(
+    ctx,
+    baseConfig({
+      stepThreshold: 1,
+      timeThresholdSeconds: 9999,
+      minGapSeconds: 0,
+      escalation: { enabled: true, afterNudges: 2, stepFactor: 2, timeFactor: 2, maxLevel: 3 },
+    }),
+  )
+  const agent = {}
+  const textsOf = (out) => (out.additionalContexts ?? []).map((m) => m.content[0].text)
+  const escOf = async () => (await routeCall(ctx, 'status')).body.value.escalation
+  const fire = async () => textsOf(await runTool(ctx, agent, 'read'))
+
+  // 第 1 条：还不到 N，普通文案
+  const n1 = await fire()
+  assert.equal(n1.length, 1, '第 1 步应提醒')
+  assert.ok(n1[0].includes('进度汇报') && !n1[0].includes('未响应'), `第 1 条应是普通文案，实际: ${n1[0]}`)
+  let esc = await escOf()
+  assert.equal(esc.level, 0, '第 1 条还不该升级')
+  assert.equal(esc.silentStreak, 1)
+
+  // 第 2 条：streak=2 → 等级 1 → 「未响应」，阈值翻倍
+  const n2 = await fire()
+  assert.ok(n2[0].includes('未响应'), `连续 2 次未汇报应升级，实际: ${n2[0]}`)
+  assert.ok(n2[0].includes('先输出 1-2 行文字'), '升级档要明确要求先说话')
+  assert.ok(!n2[0].includes('汇报完继续执行'), '升级档不能留「继续执行」这种可跳过的措辞')
+  esc = await escOf()
+  assert.equal(esc.level, 1)
+  assert.equal(esc.stepThreshold, 2, '步数阈值应翻倍')
+  assert.equal(esc.timeThresholdSeconds, 19998, '时间阈值应翻倍')
+
+  // 阈值已抬高：1 步不触发
+  assert.equal((await fire()).length, 0, '抬高后 1 步不该触发')
+  // 第 3 条（2 步触发）：streak=3 → 仍是 1 级
+  const n3 = await fire()
+  assert.ok(n3[0].includes('未响应'), `streak=3 仍是 1 级，实际: ${n3[0]}`)
+  // 第 4 条（2 步）：streak=4 → 级别 2 → 「强制」
+  assert.equal((await fire()).length, 0, '1 步不该触发')
+  const n4 = await fire()
+  assert.ok(n4[0].includes('强制'), `streak=4 应升到「强制」，实际: ${n4[0]}`)
+  esc = await escOf()
+  assert.equal(esc.level, 2)
+  assert.equal(esc.stepThreshold, 4, '步数阈值应 ×4')
+
+  // 模型汇报 → 立刻复位
+  const stream = ctx.listeners.get('agent/assistant-stream')[0]
+  stream({ agent, frame: { type: 'chunk', chunk: { type: 'text-delta', text: '已经修好了…' } } })
+  esc = await escOf()
+  assert.equal(esc.silentStreak, 0, '模型汇报后沉默连击应归零')
+  assert.equal(esc.level, 0, '模型汇报后等级应回 0')
+  assert.equal(esc.stepThreshold, 1, '复位后阈值回到基线')
+
+  // 复位后立即按基线触发，且文案回到普通档
+  const n5 = await fire()
+  assert.equal(n5.length, 1, '复位后 1 步就该能提醒')
+  assert.ok(n5[0].includes('进度汇报'), '复位后应回到普通文案')
+  assert.ok(!n5[0].includes('未响应') && !n5[0].includes('强制'), '复位后不该还是升级文案')
+
+  console.log('✅ 28. 自适应退避（未汇报→「未响应/强制」+抬阈值；汇报后立刻复位回普通档）')
+}
+
+// ---------------------------------------------------------------- 29. 退避开关
+{
+  const ctx = makeCtx()
+  apply(
+    ctx,
+    baseConfig({
+      stepThreshold: 1,
+      timeThresholdSeconds: 9999,
+      minGapSeconds: 0,
+      escalation: { enabled: true, afterNudges: 1, stepFactor: 2, timeFactor: 2, maxLevel: 3 },
+    }),
+  )
+  const agent = {}
+  const textsOf = (out) => (out.additionalContexts ?? []).map((m) => m.content[0].text)
+
+  // 第一次先升级
+  textsOf(await runTool(ctx, agent, 'read'))
+  assert.equal((await routeCall(ctx, 'status')).body.value.escalation.level, 1)
+
+  // 关掉「增强提醒」
+  await routeCall(ctx, 'config', { escalationEnabled: false })
+  const esc = (await routeCall(ctx, 'status')).body.value.escalation
+  assert.equal(esc.enabled, false, '开关应关闭')
+  assert.equal(esc.level, 0, '关闭后立即回到 0 级')
+  assert.equal(esc.stepThreshold, 1, '关闭后阈值回到基线')
+
+  // 关闭状态下即使继续沉默也不升级
+  const n = textsOf(await runTool(ctx, agent, 'read'))
+  assert.ok(n[0].includes('进度汇报'), '关闭后应始终使用普通文案')
+  assert.ok(!n[0].includes('未响应'), '关闭后不该出现升级文案')
+
+  // 再打开，覆盖标记应清掉（回到默认）
+  await routeCall(ctx, 'config', { escalationEnabled: true })
+  const back = (await routeCall(ctx, 'status')).body.value
+  assert.equal(back.escalation.enabled, true, '开关应能重新打开')
+  assert.ok(!back.overridden.includes('escalation'), '值与默认一致时不该留覆盖标记')
+
+  console.log('✅ 29. 「增强提醒」开关（关掉立即回基线且不再升级；再打开清掉覆盖标记）')
+}
+
 console.log('\n全部通过 ✅')

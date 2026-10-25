@@ -406,11 +406,15 @@ hookState.slots[0] = {
 const panelOpen = Panel({ wide: true })
 const openNodes = collect(panelOpen)
 const openButtons = openNodes.filter((n) => n.type === 'button')
-// 1 个侧栏按钮 + 「暂停/恢复」+「恢复默认」+ 余额行的 ↻
-assert.equal(openButtons.length, 4, `展开面板应为 1 个侧栏按钮 + 3 个面板按钮，实际 ${openButtons.length}`)
+// 1 个侧栏按钮 + 「暂停/恢复」+「恢复默认」+ 余额行的 ↻ + 「增强提醒」开关
+assert.equal(openButtons.length, 5, `展开面板应为 1 个侧栏按钮 + 4 个面板按钮，实际 ${openButtons.length}`)
 assert.ok(
   openButtons.some((n) => n.props?.title === '刷新'),
   '余额行应有刷新按钮',
+)
+assert.ok(
+  openButtons.some((n) => String(n.props?.title ?? '').includes('连续几次提醒都没换来汇报')),
+  '应有「增强提醒」开关（tooltip 说明作用）',
 )
 const inputs = openNodes.filter((n) => n.type === 'input')
 assert.equal(inputs.length, 3, `面板应有三个输入框（步数/秒数/余额阈值），实际 ${inputs.length}`)
@@ -434,6 +438,69 @@ assert.ok(textOf(panelOpen).includes('梁文峰'), '面板里应显示当前时�
 assert.ok(textOf(panelOpen).includes('高峰·原价'), '面板应说明高峰是原价')
 assert.ok(textOf(panelOpen).includes('下一次切换'), '面板应给出下一次切换')
 assert.ok(textOf(panelOpen).includes('梁文谷'), '面板应预告下一次切到哪')
+
+// ---------------------------------------------------------------- 增强提醒（自适应退避）
+{
+  // 未升级：显示「正常」，进度按基线阈值
+  hookState.cursor = 0
+  hookState.slots.length = 0
+  hookState.slots[2] = true
+  hookState.slots[0] = {
+    effective: { stepThreshold: 10, timeThresholdSeconds: 120 },
+    live: { steps: 3, seconds: 40, running: true },
+    escalation: { enabled: true, active: false, level: 0, silentStreak: 1, afterNudges: 2, stepThreshold: 10, timeThresholdSeconds: 120 },
+    stats: {},
+  }
+  const idleText = textOf(Panel({ wide: true }))
+  assert.ok(idleText.includes('增强提醒'), `面板应有增强提醒行，实际: ${idleText}`)
+  assert.ok(idleText.includes('正常：按设定阈值提醒'), `未升级时应说明是正常档，实际: ${idleText}`)
+  assert.ok(idleText.includes('3 / 10'), `进度应按基线阈值显示，实际: ${idleText}`)
+
+  // 已升级到 2 级：显示等级、沉默次数、放大后的阈值，且进度条按放大阈值
+  hookState.cursor = 0
+  hookState.slots.length = 0
+  hookState.slots[2] = true
+  hookState.slots[0] = {
+    effective: { stepThreshold: 10, timeThresholdSeconds: 120 },
+    live: { steps: 3, seconds: 40, running: true },
+    escalation: {
+      enabled: true,
+      active: true,
+      level: 2,
+      silentStreak: 4,
+      afterNudges: 2,
+      stepThreshold: 40,
+      timeThresholdSeconds: 480,
+    },
+    stats: {},
+  }
+  const escalatedTree = Panel({ wide: true })
+  const escalatedText = textOf(escalatedTree)
+  assert.ok(escalatedText.includes('已升级 2'), `应显示当前等级，实际: ${escalatedText}`)
+  assert.ok(escalatedText.includes('4 连续未汇报'), `应显示连续未汇报次数，实际: ${escalatedText}`)
+  assert.ok(escalatedText.includes('40步'), `应显示放大后的步数阈值，实际: ${escalatedText}`)
+  assert.ok(escalatedText.includes('480秒'), `应显示放大后的时间阈值，实际: ${escalatedText}`)
+  assert.ok(escalatedText.includes('3 / 40'), `进度条必须按放大后的阈值，实际: ${escalatedText}`)
+  assert.ok(
+    collect(escalatedTree).some((n) => n.props?.className?.includes('pn-sub') && n.props.className.includes('is-warn')),
+    '升级状态应带警示配色',
+  )
+
+  // 开关关闭：写明「关着：始终按固定阈值提醒」
+  hookState.cursor = 0
+  hookState.slots.length = 0
+  hookState.slots[2] = true
+  hookState.slots[0] = {
+    effective: { stepThreshold: 10, timeThresholdSeconds: 120 },
+    live: { steps: 3, seconds: 40, running: true },
+    escalation: { enabled: false, active: false, level: 0, silentStreak: 0, stepThreshold: 10, timeThresholdSeconds: 120 },
+    stats: {},
+  }
+  const offEscText = textOf(Panel({ wide: true }))
+  assert.ok(offEscText.includes('关着：始终按固定阈值提醒'), `关闭时应明说，实际: ${offEscText}`)
+  assert.ok(offEscText.includes('3 / 10'), `关闭后退避不生效，仍按基线阈值，实际: ${offEscText}`)
+}
+
 
 // 余额低于阈值：面板要标警示
 hookState.cursor = 0
