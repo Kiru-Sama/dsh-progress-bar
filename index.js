@@ -22,6 +22,9 @@
  * @module kiru-progress-bar
  */
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import http from 'node:http'
+import https from 'node:https'
 
 export const name = 'progress-nudge'
 
@@ -102,6 +105,24 @@ export const DEFAULTS = {
      */
     holidays: [],
   },
+  /**
+   * 版本检测：对比本机装的版本和 GitHub 上的最新版本，只在界面上提示，不发消息给模型。
+   *
+   * ⚠️ 这是插件里**唯一会主动出网**的功能（余额读的是宿主服务，不算出网）。
+   * 不想让它联网就把 `enabled` 关掉。
+   */
+  updateCheck: {
+    /** 是否启用。 */
+    enabled: true,
+    /** 多久查一次（秒）。默认 6 小时，没必要更勤。 */
+    intervalSeconds: 21600,
+    /**
+     * 查哪个地址。默认用 GitHub contents API（返回 base64 的 package.json）——
+     * 实测 `github.com` 被墙时 `api.github.com` 常常还能通。
+     * 想换成任意返回 `{version:...}` 或 `{content:<base64>}` 的地址都行。
+     */
+    url: 'https://api.github.com/repos/Kiru-Sama/kiru-progress-bar/contents/package.json?ref=main',
+  },
 }
 
 /** 消息来源标识。必须带插件自己的 kind，否则会被当成用户提示词污染历史。 */
@@ -115,6 +136,163 @@ const MAX_BODY_BYTES = 64 * 1024
 
 /** 最近工具名保留条数。 */
 const RECENT_TOOLS_MAX = 8
+
+// ---------------------------------------------------------------- 版本检测
+
+/**
+ * 本机装的版本号：直接读同目录的 `package.json`。
+ *
+ * 用 `import.meta.url` 而不是 `process.cwd()`——插件是经 profile 的 junction
+ * 加载的，cwd 指向哪里完全不确定。
+ */
+const LOCAL_VERSION = (() => {
+  try {
+    const raw = readFileSync(new URL('./package.json', import.meta.url), 'utf8')
+    const version = JSON.parse(raw).version
+    return typeof version === 'string' && version !== '' ? version : '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+})()
+
+/**
+ * 比较两个版本号，返回 -1 / 0 / 1。
+ *
+ * 按 semver 的核心规则来（不引第三方包）：
+ *   - 主版本/次版本/修订号按**数字**比，不是字符串比：`1.10.0 > 1.9.0`
+ *   - 缺段补 0：`1.2` == `1.2.0`
+ *   - 前缀 `v` 忽略
+ *   - 构建元数据 `+xxx` 不参与比较
+ *   - 预发布版**低于**同号正式版：`1.3.0-beta < 1.3.0`
+ *     （这一点用"补 0"法会判错，所以单独处理 pre）
+ *
+ * 之前写成"按 `.`/`-` 切开逐段补 0 比大小"，结果把 `1.3.0` 判成小于
+ * `1.3.0-beta`——测试第 30 项把它抓出来了。
+ */
+export function compareVersions(left, right) {
+  const parse = (value) => {
+    const text = String(value).trim().replace(/^v/i, '')
+    const withoutBuild = text.split('+')[0]
+    const dash = withoutBuild.indexOf('-')
+    const core = dash === -1 ? withoutBuild : withoutBuild.slice(0, dash)
+    const pre = dash === -1 ? '' : withoutBuild.slice(dash + 1)
+    return {
+      nums: core.split('.').map((part) => {
+        const n = Number(part)
+        return Number.isFinite(n) ? n : 0
+      }),
+      pre: pre === '' ? null : pre.split('.'),
+    }
+  }
+
+  const a = parse(left)
+  const b = parse(right)
+
+  const length = Math.max(a.nums.length, b.nums.length)
+  for (let i = 0; i < length; i += 1) {
+    const x = a.nums[i] ?? 0
+    const y = b.nums[i] ?? 0
+    if (x !== y) return x > y ? 1 : -1
+  }
+
+  // 核心号相同：没有预发布标记的那个更高
+  if (a.pre === null && b.pre === null) return 0
+  if (a.pre === null) return 1
+  if (b.pre === null) return -1
+
+  const preLength = Math.max(a.pre.length, b.pre.length)
+  for (let i = 0; i < preLength; i += 1) {
+    const x = a.pre[i]
+    const y = b.pre[i]
+    if (x === undefined) return -1 // 段数少的更低
+    if (y === undefined) return 1
+    const xNumber = x.trim() !== '' && Number.isFinite(Number(x))
+    const yNumber = y.trim() !== '' && Number.isFinite(Number(y))
+    if (xNumber && yNumber) {
+      const nx = Number(x)
+      const ny = Number(y)
+      if (nx !== ny) return nx > ny ? 1 : -1
+    } else if (xNumber !== yNumber) {
+      return xNumber ? -1 : 1 // 数字段优先级低于字母段
+    } else if (x !== y) {
+      return x > y ? 1 : -1
+    }
+  }
+  return 0
+}
+
+/**
+ * 从响应里取出版本号。
+ *
+ * 同时认两种形状：
+ *   - 原始 `package.json`：`{ version: '1.3.0' }`
+ *   - GitHub contents API：`{ content: '<base64 的 package.json>' }`
+ */
+export function extractVersion(payload) {
+  if (payload === null || typeof payload !== 'object') return null
+  if (typeof payload.version === 'string' && payload.version !== '') return payload.version
+  if (typeof payload.content === 'string' && payload.content !== '') {
+    try {
+      const decoded = JSON.parse(Buffer.from(payload.content, 'base64').toString('utf8'))
+      return typeof decoded.version === 'string' ? decoded.version : null
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+/**
+ * 取一个 JSON。用 node 内建的 http/https（保持零外部依赖）。
+ *
+ * 支持 `http://` 是为了测试：测试会起一个本地服务器冒充 GitHub，
+ * 这样「有新版本 / 同版本 / 请求失败」三条路径都能端到端跑，不用打桩。
+ */
+export function getJson(url, timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    let parsed
+    try {
+      parsed = new URL(url)
+    } catch {
+      reject(new Error('invalid url'))
+      return
+    }
+    const mod = parsed.protocol === 'http:' ? http : https
+    const req = mod.get(
+      parsed,
+      { headers: { 'user-agent': 'kiru-progress-bar-version-check' }, timeout: timeoutMs },
+      (res) => {
+        if (res.statusCode !== 200) {
+          res.resume()
+          reject(new Error(`HTTP ${res.statusCode}`))
+          return
+        }
+        let data = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk) => {
+          data += chunk
+          // 防呆：package.json 不该超过 200KB，超了直接掐断，别把内存吃掉
+          if (data.length > 200_000) {
+            req.destroy()
+            reject(new Error('response too large'))
+          }
+        })
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(data))
+          } catch {
+            reject(new Error('invalid json'))
+          }
+        })
+      },
+    )
+    req.on('timeout', () => {
+      req.destroy()
+      reject(new Error('timeout'))
+    })
+    req.on('error', reject)
+  })
+}
 
 // ---------------------------------------------------------------- 峰谷时段
 
@@ -450,6 +628,23 @@ function validate(config) {
       throw new Error(`progress-nudge: 非法配置 escalation.${key}=${value} —— 必须是 >= 1 的数字`)
     }
   }
+
+  // 版本检测
+  const uc = config.updateCheck
+  if (uc === null || typeof uc !== 'object') {
+    throw new Error('progress-nudge: 非法配置 updateCheck —— 必须是对象')
+  }
+  if (typeof uc.enabled !== 'boolean') {
+    throw new Error(`progress-nudge: 非法配置 updateCheck.enabled=${uc.enabled} —— 必须是布尔值`)
+  }
+  if (!Number.isInteger(uc.intervalSeconds) || uc.intervalSeconds < 60) {
+    throw new Error(
+      `progress-nudge: 非法配置 updateCheck.intervalSeconds=${uc.intervalSeconds} —— 必须是 >= 60 的整数`,
+    )
+  }
+  if (typeof uc.url !== 'string' || !/^https?:\/\//.test(uc.url)) {
+    throw new Error(`progress-nudge: 非法配置 updateCheck.url=${JSON.stringify(uc.url)} —— 必须是 http(s) 地址`)
+  }
 }
 
 // ---------------------------------------------------------------- 余额
@@ -535,6 +730,7 @@ export function apply(ctx, rowConfig) {
     ...(rowConfig ?? {}),
     balance: { ...DEFAULTS.balance, ...(rowConfig?.balance ?? {}) },
     tariff: { ...DEFAULTS.tariff, ...(rowConfig?.tariff ?? {}) },
+    updateCheck: { ...DEFAULTS.updateCheck, ...(rowConfig?.updateCheck ?? {}) },
     escalation: { ...DEFAULTS.escalation, ...(rowConfig?.escalation ?? {}) },
   }
   validate(config)
@@ -769,6 +965,69 @@ export function apply(ctx, rowConfig) {
       })
     }
     ctx.effect(() => () => clearTimeout(balanceTimer), 'progress-nudge: balance polling')
+  }
+
+  // ---------------------------------------------------------------- 版本检测
+
+  /**
+   * 最近一次版本检测的结果。
+   *
+   * `status`:
+   * - `unknown`  还没查过
+   * - `ok`       查到了
+   * - `failed`   查询失败（断网 / 被墙 / 限流 / 返回体不对）
+   * - `disabled` 配置里关掉了
+   */
+  let updateState = {
+    status: effective('updateCheck').enabled === true ? 'unknown' : 'disabled',
+    checkedAt: 0,
+    latest: null,
+    error: null,
+  }
+
+  /**
+   * 查一次最新版本。
+   *
+   * ⚠️ **任何异常都必须吞掉**：这个功能是锦上添花，不能因为 GitHub 抽风
+   * 就把插件搞崩（真机上 github.com 经常连不上，api.github.com 反而能通）。
+   */
+  async function checkForUpdate() {
+    const cfg = effective('updateCheck')
+    if (cfg.enabled !== true) {
+      updateState = { status: 'disabled', checkedAt: 0, latest: null, error: null }
+      return
+    }
+    try {
+      const payload = await getJson(cfg.url)
+      const latest = extractVersion(payload)
+      if (latest === null) {
+        updateState = { status: 'failed', checkedAt: Date.now(), latest: null, error: 'no version field' }
+        return
+      }
+      updateState = { status: 'ok', checkedAt: Date.now(), latest, error: null }
+    } catch (failure) {
+      updateState = {
+        status: 'failed',
+        checkedAt: Date.now(),
+        latest: null,
+        error: String(failure?.message ?? failure),
+      }
+    }
+  }
+
+  if (effective('updateCheck').enabled === true) {
+    let updateTimer = null
+    const scheduleUpdate = (delayMs) => {
+      updateTimer = setTimeout(async () => {
+        await checkForUpdate()
+        scheduleUpdate(effective('updateCheck').intervalSeconds * 1000)
+      }, delayMs)
+      // 和余额轮询一样：必须 unref，否则插件卸载后进程退不掉
+      if (typeof updateTimer.unref === 'function') updateTimer.unref()
+    }
+    // 启动后缓 10 秒再查：别和宿主自己的启动请求抢带宽
+    scheduleUpdate(10_000)
+    ctx.effect(() => () => clearTimeout(updateTimer), 'progress-nudge: update check')
   }
 
   /**
@@ -1300,6 +1559,13 @@ export function apply(ctx, rowConfig) {
                 return
               }
 
+              // 手动查一次版本（面板上的「查更新」按钮）
+              if (method === 'update') {
+                await checkForUpdate()
+                respond(res, 200, { ok: true, value: snapshotUpdate() })
+                return
+              }
+
               if (method === 'config') {
                 const patch = {}
                 if (typeof body.stepThreshold === 'number') patch.stepThreshold = clampInt(body.stepThreshold, 1, 10000)
@@ -1323,6 +1589,15 @@ export function apply(ctx, rowConfig) {
                   const next = { ...effective('escalation'), enabled: body.escalationEnabled }
                   if (next.enabled === config.escalation.enabled) delete overrides.escalation
                   else overrides.escalation = next
+                }
+                // 版本检测开关（不需要的话可以彻底关掉，插件就不出网了）
+                if (typeof body.updateCheckEnabled === 'boolean') {
+                  const next = { ...effective('updateCheck'), enabled: body.updateCheckEnabled }
+                  if (next.enabled === config.updateCheck.enabled) delete overrides.updateCheck
+                  else overrides.updateCheck = next
+                  if (next.enabled !== true) {
+                    updateState = { status: 'disabled', checkedAt: 0, latest: null, error: null }
+                  }
                 }
                 // 把值改回默认值时不留覆盖标记，`overridden` 才真正表示
                 // 「和默认值不一样」，而不是「碰过这个字段」。
@@ -1424,7 +1699,30 @@ export function apply(ctx, rowConfig) {
       nudge: lastNudge,
       balance: snapshotBalance(),
       tariff: snapshotTariff(),
+      update: snapshotUpdate(),
       stats: { ...stats },
+    }
+  }
+
+  /**
+   * 给界面看的版本状态。
+   *
+   * `available` 就是「远端版本比本机新」——界面据此显示「可更新」。
+   * 查不到（failed/disabled）时 `latest` 为 null、`available` 恒为 false，
+   * 绝不猜。
+   */
+  function snapshotUpdate() {
+    const cfg = effective('updateCheck')
+    const latest = updateState.latest
+    return {
+      enabled: cfg.enabled === true,
+      current: LOCAL_VERSION,
+      latest,
+      status: updateState.status,
+      error: updateState.error ?? null,
+      checkedAt: updateState.checkedAt || null,
+      available: latest !== null && compareVersions(latest, LOCAL_VERSION) > 0,
+      url: cfg.url,
     }
   }
 

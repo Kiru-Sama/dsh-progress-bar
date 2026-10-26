@@ -406,11 +406,15 @@ hookState.slots[0] = {
 const panelOpen = Panel({ wide: true })
 const openNodes = collect(panelOpen)
 const openButtons = openNodes.filter((n) => n.type === 'button')
-// 1 个侧栏按钮 + 「暂停/恢复」+「恢复默认」+ 余额行的 ↻ + 「增强提醒」开关
-assert.equal(openButtons.length, 5, `展开面板应为 1 个侧栏按钮 + 4 个面板按钮，实际 ${openButtons.length}`)
+// 1 个侧栏按钮 + 「暂停/恢复」+「恢复默认」+ 余额 ↻ + 「增强提醒」开关 + 版本 ↻
+assert.equal(openButtons.length, 6, `展开面板应为 1 个侧栏按钮 + 5 个面板按钮，实际 ${openButtons.length}`)
 assert.ok(
   openButtons.some((n) => n.props?.title === '刷新'),
   '余额行应有刷新按钮',
+)
+assert.ok(
+  openButtons.some((n) => n.props?.title === '查更新'),
+  '版本行应有「查更新」按钮',
 )
 assert.ok(
   openButtons.some((n) => String(n.props?.title ?? '').includes('连续几次提醒都没换来汇报')),
@@ -499,6 +503,52 @@ assert.ok(textOf(panelOpen).includes('梁文谷'), '面板应预告下一次切�
   const offEscText = textOf(Panel({ wide: true }))
   assert.ok(offEscText.includes('关着：始终按固定阈值提醒'), `关闭时应明说，实际: ${offEscText}`)
   assert.ok(offEscText.includes('3 / 10'), `关闭后退避不生效，仍按基线阈值，实际: ${offEscText}`)
+}
+
+// ---------------------------------------------------------------- 版本行
+{
+  const renderWith = (update) => {
+    hookState.cursor = 0
+    hookState.slots.length = 0
+    hookState.slots[2] = true
+    hookState.slots[0] = {
+      effective: { stepThreshold: 10, timeThresholdSeconds: 120 },
+      live: { steps: 0, seconds: 0, running: true },
+      update,
+      stats: {},
+    }
+    const tree = Panel({ wide: true })
+    return { text: textOf(tree), tree }
+  }
+
+  // 已是最新
+  const latest = renderWith({ enabled: true, current: '1.3.0', latest: '1.3.0', status: 'ok', available: false })
+  assert.ok(latest.text.includes('版本'), `面板应有版本行，实际: ${latest.text}`)
+  assert.ok(latest.text.includes('1.3.0'), `应显示本机版本，实际: ${latest.text}`)
+  assert.ok(latest.text.includes('已是最新'), `同版本时应说已是最新，实际: ${latest.text}`)
+  assert.ok(
+    !collect(latest.tree).some((n) => n.props?.className?.includes('pn-sub') && n.props.className.includes('is-warn')),
+    '已是最新时不该用警示色',
+  )
+
+  // 可更新
+  const available = renderWith({ enabled: true, current: '1.3.0', latest: '1.4.0', status: 'ok', available: true })
+  assert.ok(available.text.includes('可更新'), `远端更新时应提示，实际: ${available.text}`)
+  assert.ok(available.text.includes('1.4.0'), `应显示远端版本，实际: ${available.text}`)
+  assert.ok(
+    collect(available.tree).some((n) => n.props?.className?.includes('pn-sub') && n.props.className.includes('is-warn')),
+    '可更新时应用警示色',
+  )
+
+  // 查询失败：不能假装是最新
+  const failed = renderWith({ enabled: true, current: '1.3.0', latest: null, status: 'failed', error: 'timeout', available: false })
+  assert.ok(failed.text.includes('查询失败'), `失败应如实显示，实际: ${failed.text}`)
+  assert.ok(failed.text.includes('timeout'), `失败原因也要显示，实际: ${failed.text}`)
+  assert.ok(!failed.text.includes('已是最新'), '失败时不能声称已是最新')
+
+  // 关闭
+  const off = renderWith({ enabled: false, current: '1.3.0', latest: null, status: 'disabled', available: false })
+  assert.ok(off.text.includes('未开启'), `关闭时应明说，实际: ${off.text}`)
 }
 
 

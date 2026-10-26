@@ -67,6 +67,13 @@ window.__ModuleLoader__.load({
       escalationActive: '已升级',
       escalationDisabled: '关着：始终按固定阈值提醒',
       escalationStreak: '连续未汇报',
+      version: '版本',
+      versionLatest: '已是最新',
+      versionAvailable: '可更新',
+      versionChecking: '查询中…',
+      versionFailed: '查询失败',
+      versionOff: '未开启',
+      checkUpdate: '查更新',
       refresh: '刷新',
       dismiss: '关闭',
     }
@@ -118,6 +125,13 @@ window.__ModuleLoader__.load({
       escalationActive: 'escalated',
       escalationDisabled: 'Off: fixed thresholds only',
       escalationStreak: 'unanswered in a row',
+      version: 'Version',
+      versionLatest: 'up to date',
+      versionAvailable: 'update available',
+      versionChecking: 'checking…',
+      versionFailed: 'check failed',
+      versionOff: 'off',
+      checkUpdate: 'Check for updates',
       refresh: 'Refresh',
       dismiss: 'Dismiss',
     }
@@ -453,6 +467,16 @@ window.__ModuleLoader__.load({
           }
         }
 
+        /** 手动查一次版本（版本行那个 ↻）。 */
+        const checkUpdate = async () => {
+          try {
+            await api('update')
+            await load()
+          } catch {
+            /* 查询失败会体现在 status=failed 上 */
+          }
+        }
+
         // 打开面板就顺手刷一次余额——不然显示的可能是几分钟前的旧数。
         useEffect(() => {
           if (!open) return
@@ -697,6 +721,30 @@ window.__ModuleLoader__.load({
                     onChange: (event) => onBalInput(event.target.value),
                   }),
                 ),
+                // 版本：只在这里提示，不发消息给模型
+                h('div', { className: 'pn-sep' }),
+                h(
+                  'div',
+                  { className: 'pn-row' },
+                  h('span', null, t.version),
+                  h(
+                    'span',
+                    { className: status?.update?.available ? 'is-warn' : '' },
+                    versionText(status?.update),
+                    ' ',
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'pn-mini',
+                        title: t.checkUpdate,
+                        onClick: () => void checkUpdate(),
+                      },
+                      '↻',
+                    ),
+                  ),
+                ),
+                h('div', { className: versionDetailClass(status?.update) }, versionDetail(status?.update)),
                 h(
                   'div',
                   { className: 'pn-actions' },
@@ -861,6 +909,32 @@ window.__ModuleLoader__.load({
       if (balance.text) parts.push(`${t.balanceRecharge} ${balance.text}`)
       if (balance.bonusText) parts.push(`${t.balanceBonus} ${balance.bonusText}`)
       return parts.length > 0 ? parts.join(' · ') : null
+    }
+
+    /** 版本行右侧：只显示本机版本号，其余状态放第二行小字。 */
+    function versionText(update) {
+      if (update === null || update === undefined) return '—'
+      return update.current ?? '—'
+    }
+
+    /** 版本行的第二行小字：可更新 / 已是最新 / 查询失败 / 未开启。 */
+    function versionDetail(update) {
+      if (update === null || update === undefined) return ''
+      if (update.enabled !== true) return t.versionOff
+      if (update.status === 'failed') {
+        return `${t.versionFailed}${update.error ? `（${update.error}）` : ''}`
+      }
+      if (update.status === 'unknown') return t.versionChecking
+      if (update.available === true && update.latest) return `${t.versionAvailable} → ${update.latest}`
+      return t.versionLatest
+    }
+
+    /** 可更新 / 查询失败时用警示色，其余保持低调。 */
+    function versionDetailClass(update) {
+      if (update === null || update === undefined) return 'pn-sub'
+      if (update.enabled !== true) return 'pn-sub'
+      if (update.available === true || update.status === 'failed') return 'pn-sub is-warn'
+      return 'pn-sub'
     }
 
     function apply(ctx) {

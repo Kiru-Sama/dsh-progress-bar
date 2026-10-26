@@ -72,3 +72,13 @@
           timeFactor: 2
           # 最高升到第几级（0 = 不升级）。
           maxLevel: 3
+        # 版本检测：对比本机版本和 GitHub 最新版本，只在侧栏面板提示，不发消息给模型。
+        # ⚠️ 这是插件里唯一会主动出网的功能（余额读的是宿主服务，不算出网）。
+        # 不想联网就把 enabled 设成 false，插件就完全离线了。
+        updateCheck:
+          enabled: true
+          # 多久查一次（秒），最小 60。默认 6 小时。
+          intervalSeconds: 21600
+          # 查哪个地址，需返回 {version:"x.y.z"} 或 {content:"<base64 的 package.json>"}。
+          # 默认用 GitHub contents API：实测 github.com 被墙时 api.github.com 常常还能通。
+          url: 'https://api.github.com/repos/Kiru-Sama/kiru-progress-bar/contents/package.json?ref=main'

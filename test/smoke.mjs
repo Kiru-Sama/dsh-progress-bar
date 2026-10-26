@@ -6,7 +6,8 @@
  */
 import assert from 'node:assert/strict'
 
-const { DEFAULTS, apply, name, tariffAt, nextTariffSwitch } = await import('../index.js')
+const { DEFAULTS, apply, name, tariffAt, nextTariffSwitch, compareVersions, extractVersion, getJson } =
+  await import('../index.js')
 
 console.log(`插件名: ${name}`)
 assert.equal(name, 'progress-nudge', 'name 导出应是 progress-nudge')
@@ -267,14 +268,21 @@ function textOf(decision) {
   const { readFile } = await import('node:fs/promises')
   const source = await readFile(new URL('../index.js', import.meta.url), 'utf8')
   const imports = [...source.matchAll(/^\s*import\s.+?from\s+['"]([^'"]+)['"]/gm)].map((m) => m[1])
+  // 真正的约束是「每一个 import 都是 node: 内建」，不是「只能有某一个内建」。
+  // 之前把期望写死成 ['node:crypto']，加个 node:fs 就误报——那是测试的错，不是代码的错。
+  const outsiders = imports.filter((spec) => !spec.startsWith('node:'))
   assert.deepEqual(
-    imports,
-    ['node:crypto'],
-    `index.js 只允许 import node 内建模块，实际: ${imports.join(', ')}`,
+    outsiders,
+    [],
+    `index.js 只能 import node 内建模块，发现外部依赖: ${outsiders.join(', ')}`,
+  )
+  assert.ok(
+    imports.includes('node:crypto'),
+    '必须仍用 node:crypto 生成消息 id（不借宿主的 brandString）',
   )
   const client = await readFile(new URL('../client.js', import.meta.url), 'utf8')
   assert.ok(!/^\s*import\s/m.test(client), 'client.js 不应有顶层 import（只走 __ModuleLoader__）')
-  console.log('✅ 11. 零外部依赖（只 import node 内建模块）')
+  console.log(`✅ 11. 零外部依赖（只 import node 内建：${imports.join(', ')}）`)
 }
 
 // ---------------------------------------------------------------- 12. 暂停 = 时钟冻结
@@ -1006,6 +1014,107 @@ function routeCall(ctx, method, payload, headers = { host: 'localhost' }) {
   assert.ok(!back.overridden.includes('escalation'), '值与默认一致时不该留覆盖标记')
 
   console.log('✅ 29. 「增强提醒」开关（关掉立即回基线且不再升级；再打开清掉覆盖标记）')
+}
+
+// ---------------------------------------------------------------- 30. 版本号比较与响应解析
+{
+  const cases = [
+    ['1.3.0', '1.2.1', 1],
+    ['1.2.1', '1.3.0', -1],
+    ['1.3.0', '1.3.0', 0],
+    ['v1.3.0', '1.3.0', 0], // 前缀 v 要能吃掉
+    ['1.10.0', '1.9.0', 1], // 数字比较，不是字符串比较
+    ['1.2', '1.2.0', 0], // 缺段按 0 补
+    ['2.0.0', '1.99.99', 1],
+    ['1.3.0', '1.3.0-beta', 1], // 同号正式版 > 预发布
+  ]
+  for (const [left, right, expected] of cases) {
+    assert.equal(compareVersions(left, right), expected, `compareVersions(${left}, ${right}) 应为 ${expected}`)
+  }
+
+  // 两种响应形状都要认
+  assert.equal(extractVersion({ version: '1.4.0' }), '1.4.0', '原始 package.json 形状')
+  assert.equal(
+    extractVersion({ content: Buffer.from(JSON.stringify({ version: '1.5.0' })).toString('base64') }),
+    '1.5.0',
+    'GitHub contents API 形状（base64）',
+  )
+  assert.equal(extractVersion({}), null, '没有版本字段应返回 null，不能瞎猜')
+  assert.equal(extractVersion({ content: '不是base64的json' }), null, '坏的 base64 应返回 null')
+  assert.equal(extractVersion(null), null)
+
+  console.log('✅ 30. 版本号比较（数字段比较 / v 前缀 / 预发布）+ 两种响应形状')
+}
+
+// ---------------------------------------------------------------- 31. 版本检测端到端
+{
+  const { createServer } = await import('node:http')
+  // 起一个本地服务器冒充 GitHub——这样三条路径（有新版 / 同版本 / 失败）都能真跑
+  let mode = 'newer'
+  const server = createServer((req, res) => {
+    if (mode === 'fail') {
+      res.statusCode = 500
+      res.end('boom')
+      return
+    }
+    const version = mode === 'newer' ? '9.9.9' : '0.0.1'
+    res.statusCode = 200
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify({ version }))
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const port = server.address().port
+  const url = `http://127.0.0.1:${port}/package.json`
+
+  try {
+    const ctx = makeCtx()
+    apply(ctx, baseConfig({ updateCheck: { enabled: true, intervalSeconds: 3600, url } }))
+
+    // 1) 远端更新 → available
+    const newer = (await routeCall(ctx, 'update')).body.value
+    assert.equal(newer.status, 'ok', '查询应成功')
+    assert.equal(newer.latest, '9.9.9', '应读到远端版本')
+    assert.equal(newer.available, true, '远更新时应标记可更新')
+    assert.equal(newer.current, newer.current.toLowerCase(), 'current 应是字符串版本号')
+    assert.match(newer.current, /^\d+\.\d+\.\d+/, `本机版本应是 package.json 里的版本，实际 ${newer.current}`)
+
+    // 2) 远端更旧 → 不可更新（等价于「已是最新」）
+    mode = 'same'
+    const older = (await routeCall(ctx, 'update')).body.value
+    assert.equal(older.available, false, '远端更旧时不该提示更新')
+
+    // 3) 请求失败 → 状态 failed，不崩、不猜
+    mode = 'fail'
+    const failed = (await routeCall(ctx, 'update')).body.value
+    assert.equal(failed.status, 'failed', '失败应如实记录')
+    assert.equal(failed.latest, null, '失败时不该保留旧值假装成功')
+    assert.equal(failed.available, false, '失败时不能提示可更新')
+
+    // 主快照里也要带上 update 字段
+    const snapshot = (await routeCall(ctx, 'status')).body.value
+    assert.equal(snapshot.update.current, newer.current, 'status 里应带版本信息')
+
+    // 关掉后不再出网
+    await routeCall(ctx, 'config', { updateCheckEnabled: false })
+    const disabled = (await routeCall(ctx, 'update')).body.value
+    assert.equal(disabled.status, 'disabled', '关闭后应标记 disabled')
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+
+  // getJson 对非 200 要 reject（否则会把错误页当 JSON 解析）
+  const bad = createServer((req, res) => {
+    res.statusCode = 404
+    res.end('not found')
+  })
+  await new Promise((resolve) => bad.listen(0, '127.0.0.1', resolve))
+  try {
+    await assert.rejects(() => getJson(`http://127.0.0.1:${bad.address().port}/x`, 3000), /HTTP 404/)
+  } finally {
+    await new Promise((resolve) => bad.close(resolve))
+  }
+
+  console.log('✅ 31. 版本检测端到端（有新版 / 更旧 / 请求失败 / 关闭 + 非 200 会 reject）')
 }
 
 console.log('\n全部通过 ✅')
