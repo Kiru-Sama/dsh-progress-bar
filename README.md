@@ -374,6 +374,9 @@ level         = min(floor(silentStreak / afterNudges), maxLevel)
 
 > **新增 bundle 不会热加载**，必须重启才会激活。
 
+想改代码 / 发版？先看 [RELEASE.md](RELEASE.md)——里面写了版本号怎么定、
+什么时候打 tag、以及**为什么忘了改版本号不会报错**。
+
 ## 验证
 
 测试**零依赖**，不需要装任何东西，只用 Node 自带的能力：
