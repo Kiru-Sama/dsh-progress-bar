@@ -1,4 +1,4 @@
-# kiru-progress-bar
+# dsh-progress-bar
 
 让 Agent 在长回合里**主动、简短地汇报进度**的 DeepSeek Harness 插件。
 
@@ -420,7 +420,7 @@ powershell -File tools\rollback-profile.ps1
 ```
 
 会还原 profile 的 `package.json`、移除 junction。还原后重启 App 即彻底卸载。
-（也可以只把 `dsh.profile.bundles` 里的 `kiru-progress-bar` 删掉再重启。）
+（也可以只把 `dsh.profile.bundles` 里的 `dsh-progress-bar` 删掉再重启。）
 
 ## 开发备注
 
@@ -436,7 +436,7 @@ powershell -File tools\rollback-profile.ps1
 
 **实测**：插件里 `import z from '@deepseek-ai/schemastery'` 会让整个插件挂掉，
 宿主只在 stderr 报一行
-`progress-nudge (kiru-progress-bar): failed to import`。
+`progress-nudge (dsh-progress-bar): failed to import`。
 
 原因两层：
 

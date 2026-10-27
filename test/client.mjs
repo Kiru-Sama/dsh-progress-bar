@@ -97,7 +97,7 @@ new Function('window', 'fetch', 'document', 'navigator', source)(
 )
 
 assert.ok(captured !== null, 'client.js 应调用 __ModuleLoader__.load')
-assert.equal(captured.id, 'kiru-progress-bar', '模块 id 必须等于包名')
+assert.equal(captured.id, 'dsh-progress-bar', '模块 id 必须等于包名')
 
 const mod = captured.factory((name) => {
   if (name === 'react') return React

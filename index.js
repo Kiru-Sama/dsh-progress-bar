@@ -1,5 +1,5 @@
 /**
- * Host half of kiru-progress-bar.
+ * Host half of dsh-progress-bar.
  *
  * 两件事：
  *   1. 自上次汇报起累计经过 `timeThresholdSeconds` 秒 → 提醒 Agent 汇报进度；
@@ -19,7 +19,7 @@
  *     （DSH 的 `brandString` 是恒等函数，uuid 字符串可直接用）。
  * 只依赖 node 内建模块，插件因此可以在任何部署里加载。
  *
- * @module kiru-progress-bar
+ * @module dsh-progress-bar
  */
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
@@ -121,7 +121,7 @@ export const DEFAULTS = {
      * 实测 `github.com` 被墙时 `api.github.com` 常常还能通。
      * 想换成任意返回 `{version:...}` 或 `{content:<base64>}` 的地址都行。
      */
-    url: 'https://api.github.com/repos/Kiru-Sama/kiru-progress-bar/contents/package.json?ref=main',
+    url: 'https://api.github.com/repos/Kiru-Sama/dsh-progress-bar/contents/package.json?ref=main',
   },
 }
 
@@ -260,7 +260,7 @@ export function getJson(url, timeoutMs = 8000) {
     const mod = parsed.protocol === 'http:' ? http : https
     const req = mod.get(
       parsed,
-      { headers: { 'user-agent': 'kiru-progress-bar-version-check' }, timeout: timeoutMs },
+      { headers: { 'user-agent': 'dsh-progress-bar-version-check' }, timeout: timeoutMs },
       (res) => {
         if (res.statusCode !== 200) {
           res.resume()
