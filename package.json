@@ -1,6 +1,6 @@
 {
   "name": "dsh-progress-bar",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Progress nudge for DeepSeek Harness: remind the agent to report progress after N steps or N seconds, with a live sidebar panel",
   "author": "Kiru-Sama",
   "repository": {

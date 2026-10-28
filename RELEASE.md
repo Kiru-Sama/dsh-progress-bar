@@ -3,24 +3,43 @@
 每次要把改动推上 `main` 之前，走一遍这四步。写在这里是因为**会话会丢上下文**——
 将来不管是我、别的 AI、还是几个月后的你，照这份做就行。
 
-## 0. 自动 Release（推荐）
+## 0. 发 Release（安装方式靠它）
 
-推一个 `v*` tag，[`.github/workflows/release.yml`](.github/workflows/release.yml)
-会自动：
-
-1. 校验 tag 与 `package.json` 的 `version` 一致（不一致直接失败）；
-2. 跑 `node test/run.mjs`；
-3. `npm pack` 出 `dsh-progress-bar-<version>.tgz`，再复制一份固定别名
-   `dsh-progress-bar.tgz`；
-4. 创建/更新 GitHub Release，上传两个资产。
-
-用户拿固定地址即可安装最新版：
+用户装插件最省事的方式是粘贴这条固定地址：
 
 ```text
 https://github.com/Kiru-Sama/dsh-progress-bar/releases/latest/download/dsh-progress-bar.tgz
 ```
 
-不要在网页上手工建 Release，除非 Actions 失败需要兜底；手工建容易漏掉固定别名。
+所以每个版本都要发一个带 tgz 资产的 Release，里面**两个文件缺一不可**：
+
+| 资产 | 用途 |
+|---|---|
+| `dsh-progress-bar-<version>.tgz` | 钉死版本 / 回滚用 |
+| `dsh-progress-bar.tgz` | 固定别名，`releases/latest/download/` 靠它 |
+
+> ⚠️ **仓库里有 workflow，但它没有可靠的自动发版。** `.github/workflows/release.yml`
+> 会在推 `v*` tag 时尝试自动跑测试 + `npm pack` + 上传资产；但 **v2.0.1 实测推了 tag
+> 之后 Actions 一次都没跑**（Actions 已启用、workflow 已注册、`runs=0`，原因未查明）。
+>
+> 所以**不要假设推 tag 就完事了**：推完去 Releases 页面确认一眼。
+> 没自动生成就手工发（下面第 2 条）。
+
+### 1. 手工发（实测可靠）
+
+`设置 → Releases → Draft a new release`：
+
+1. 选新推的 tag（或让 GitHub 新建）；
+2. 标题写 `vX.Y.Z（一句话）`；
+3. 拖入两个 tgz（先 `npm pack`，再把 `<name>-<version>.tgz` 复制一份成 `<name>.tgz`）。
+
+或者在仓库里用脚本（需要本机 git 凭证，不上传任何密钥）：
+
+```powershell
+& 'F:\Deepseek Harness WorkTable\01_项目\dsh-progress-bar-dev\tools\make-release.cjs' vX.Y.Z
+```
+
+> 该脚本在**开发目录**里，不随包发布（`files` 不含它）。
 
 ## 1. 改 `package.json` 的 `version`
 
