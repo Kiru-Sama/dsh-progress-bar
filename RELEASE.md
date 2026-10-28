@@ -18,14 +18,20 @@ https://github.com/Kiru-Sama/dsh-progress-bar/releases/latest/download/dsh-progr
 | `dsh-progress-bar-<version>.tgz` | 钉死版本 / 回滚用 |
 | `dsh-progress-bar.tgz` | 固定别名，`releases/latest/download/` 靠它 |
 
-> ⚠️ **仓库里有 workflow，但它没有可靠的自动发版。** `.github/workflows/release.yml`
-> 会在推 `v*` tag 时尝试自动跑测试 + `npm pack` + 上传资产；但 **v2.0.1 实测推了 tag
-> 之后 Actions 一次都没跑**（Actions 已启用、workflow 已注册、`runs=0`，原因未查明）。
+> ⚠️ **有一个已知的漏触发情形，其余正常。**
 >
-> 所以**不要假设推 tag 就完事了**：推完去 Releases 页面确认一眼。
-> 没自动生成就手工发（下面第 2 条）。
+> - `v2.0.1`：workflow 和 tag **在同一次 push 里首次到达**，Actions 一次都没跑（runs=0）。
+> - `v2.0.2`：workflow 已在 `main` 上，推 tag 后正常触发，`release #1` **success**。
+>
+> 结论：**新增/改动 workflow 的那一次推 tag 可能不触发**；此后正常。
+> 实操上仍然建议推完 tag 去 Releases 页面看一眼——成本 2 秒，比事后排查便宜。
+>
+> ⚠️ **不要给同一个 tag 既手工发 Release 又让 CI 发。** v2.0.2 我手工发了一次，
+> CI 又跑了一次，两者都往同一个 Release 传 `dsh-progress-bar.tgz`：CI 覆盖成功，
+> 但这是白跑一次、且资产字节数会变（Windows 的 `npm pack` 与 Linux 打出的 tgz
+> 不完全一样）。**二选一。**
 
-### 1. 手工发（实测可靠）
+### 1. 手工发（CI 没触发时的兜底）
 
 `设置 → Releases → Draft a new release`：
 
@@ -48,7 +54,12 @@ https://github.com/Kiru-Sama/dsh-progress-bar/releases/latest/download/dsh-progr
 | 加功能 | minor（`1.4.0` → `1.5.0`） |
 | 修 bug | patch（`1.4.0` → `1.4.1`） |
 | 破坏性（改包名、改配置语义） | major（`1.4.0` → `2.0.0`） |
-| 只改文档 / 注释 | patch（发出去的东西变了，就该有新号） |
+| 只改文档 / 注释 | **可不必发版**（攒到下一次有功能/修复的版本一起发） |
+
+> 文档行原本写的是「docs → patch」。实践下来发现：一小时内因为改文档连发了
+> 2.0.1、2.0.2 两个版本，纯属噪音——用户看到「可更新」点进去，装完什么功能变化都没有。
+> 所以改成：**只改文档可以不发版**；如果想让用户看到更新提示，再 patch +1。
+
 
 ## 2. 提交信息里带版本号
 
