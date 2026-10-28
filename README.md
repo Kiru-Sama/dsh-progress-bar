@@ -369,10 +369,21 @@ level         = min(floor(silentStreak / afterNudges), maxLevel)
 
 ## 安装
 
-完整步骤见 [INSTALL.md](INSTALL.md)。三步：把包放进 profile 的 `node_modules/`、
-在 profile 的 `package.json` 里登记两处、重启 DeepSeek Harness。
+两种方式，任选一种：
 
-> **新增 bundle 不会热加载**，必须重启才会激活。
+**A. 本地目录**：`设置 → 插件 → 添加插件 → 从本地目录`，选这个仓库的根目录
+（里面有 `package.json` 的那层），装完 `文件 → 退出` 再启动。
+
+**B. Release tgz**：在“添加插件”输入框里粘贴固定地址：
+
+```text
+https://github.com/Kiru-Sama/dsh-progress-bar/releases/latest/download/dsh-progress-bar.tgz
+```
+
+不需要手改 profile，也不需要手工建链接。旧版“手工 link”步骤保留在
+[INSTALL.md](INSTALL.md) 里，只给开发调试/旧版 DSH 回退用。
+
+> **新增 bundle 不会热加载**，必须完全退出重启才会激活。
 
 想改代码 / 发版？先看 [RELEASE.md](RELEASE.md)——里面写了版本号怎么定、
 什么时候打 tag、以及**为什么忘了改版本号不会报错**。
@@ -385,10 +396,11 @@ level         = min(floor(silentStreak / afterNudges), maxLevel)
 node test/run.mjs
 ```
 
-它会跑两套：
+它会跑三套：
 
 - `smoke.mjs` —— Host 半边逻辑（步数/时间触发、冻结、归零、路由、余额、峰谷）
 - `client.mjs` —— Client 半边结构（加载、槽位注册、面板/横幅渲染、样式规则）
+- `package.mjs` —— 发布包结构（bundle patch、main、必须文件、非 private）
 
 `index.js` 只 `import 'node:crypto'`，`client.js` 只从宿主模块表取 `react`——
 没有 npm 依赖，所以也不存在"装依赖失败"这种问题。用 DSH 自带的 Node 跑即可，

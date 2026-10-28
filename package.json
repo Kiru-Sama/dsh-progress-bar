@@ -1,11 +1,26 @@
 {
   "name": "dsh-progress-bar",
-  "version": "2.0.0",
-  "private": true,
+  "version": "2.0.1",
   "description": "Progress nudge for DeepSeek Harness: remind the agent to report progress after N steps or N seconds, with a live sidebar panel",
+  "author": "Kiru-Sama",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kiru-Sama/dsh-progress-bar.git"
+  },
+  "homepage": "https://github.com/Kiru-Sama/dsh-progress-bar#readme",
+  "bugs": {
+    "url": "https://github.com/Kiru-Sama/dsh-progress-bar/issues"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.2.0-rc.2"
+  },
   "keywords": [
+    "dsh",
     "dsh-plugin",
     "deepseek-harness",
+    "deepseek",
+    "cordis",
     "progress",
     "reminder"
   ],

@@ -1,0 +1,52 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Verify tag matches package version
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "${GITHUB_REF_NAME}" != "v${VERSION}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match package.json version v${VERSION}"
+            exit 1
+          fi
+          echo "releasing v${VERSION}"
+
+      - name: Test
+        run: node test/run.mjs
+
+      - name: Pack
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          mkdir -p dist
+          npm pack --pack-destination dist
+          cp "dist/dsh-progress-bar-${VERSION}.tgz" dist/dsh-progress-bar.tgz
+          ls -l dist
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/dsh-progress-bar-*.tgz
+            dist/dsh-progress-bar.tgz
+          fail_on_unmatched_files: true
+          generate_release_notes: true

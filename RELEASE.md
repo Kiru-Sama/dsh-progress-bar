@@ -3,6 +3,25 @@
 每次要把改动推上 `main` 之前，走一遍这四步。写在这里是因为**会话会丢上下文**——
 将来不管是我、别的 AI、还是几个月后的你，照这份做就行。
 
+## 0. 自动 Release（推荐）
+
+推一个 `v*` tag，[`.github/workflows/release.yml`](.github/workflows/release.yml)
+会自动：
+
+1. 校验 tag 与 `package.json` 的 `version` 一致（不一致直接失败）；
+2. 跑 `node test/run.mjs`；
+3. `npm pack` 出 `dsh-progress-bar-<version>.tgz`，再复制一份固定别名
+   `dsh-progress-bar.tgz`；
+4. 创建/更新 GitHub Release，上传两个资产。
+
+用户拿固定地址即可安装最新版：
+
+```text
+https://github.com/Kiru-Sama/dsh-progress-bar/releases/latest/download/dsh-progress-bar.tgz
+```
+
+不要在网页上手工建 Release，除非 Actions 失败需要兜底；手工建容易漏掉固定别名。
+
 ## 1. 改 `package.json` 的 `version`
 
 | 改动类型 | 版本 |
@@ -21,24 +40,30 @@ fix: 赠金为 0 时不再显示「赠送 ¥0.00」（1.2.1）
 
 从 `4f3415f` 起一直是这么写的，`git log` 可查。
 
-## 3. 打 tag（推荐，但不是必需）
+## 3. 打 tag（会触发自动 Release）
 
 ```powershell
-& 'F:\GitPortable\cmd\git.exe' -C <repo> tag -a v1.4.1 -m "一句话说明这一版做了什么"
+& 'F:\GitPortable\cmd\git.exe' -C <repo> tag -a vX.Y.Z -m "一句话说明这一版做了什么"
 & 'F:\GitPortable\cmd\git.exe' -C <repo> -c http.sslBackend=schannel -c http.schannelCheckRevoke=false push origin --tags
 ```
 
 > ⚠️ **tag 不是版本检测的前提。** 检测比的是 `main` 上 `package.json` 的 `version`
 > vs 本机 `version`，跟 tag / release 完全无关。
-> tag 的价值只有两个：给「用最新版」一个稳定锚点；将来发 GitHub Release 的前提。
+> tag 的价值：给「用最新版」一个稳定锚点；触发自动 Release；给固定下载地址一个版本。
 
-## 4. 跑测试
+> 如果只想发代码、不想发 Release，推 tag 前先确认 workflow 是否要跳过；
+> 当前配置是**所有 `v*` tag 都会发 Release**。
+
+## 4. 跑测试 / 本地预览包
 
 ```bash
 node test/run.mjs
+npm pack --dry-run
 ```
 
-31 项 Host 测试 + 客户端结构测试，必须全过。
+31 项 Host 测试 + 客户端结构 + 包结构测试，必须全过。`npm pack --dry-run` 用来确认
+发布包里带上了 `package.json`、`cordis.patch.yml`、`index.js`、`client.js`、
+`locale/` 和文档，且没有把 `dist/`、`node_modules/` 打进去。
 
 ---
 
